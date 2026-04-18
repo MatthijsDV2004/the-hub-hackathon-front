@@ -28,18 +28,61 @@ function getServiceAccount(): ServiceAccount {
 }
 
 function getGraphqlEndpoint() {
-  const endpoint =
+  const endpointRaw =
     process.env.FIREBASE_DATA_CONNECT_GRAPHQL_URL ||
     process.env.DATA_CONNECT_GRAPHQL_URL ||
     "";
 
-  if (!endpoint.trim()) {
+  const endpoint = endpointRaw.trim();
+
+  if (!endpoint) {
+    return buildExecuteGraphqlEndpointFromResource();
+  }
+
+  // If this already looks like a concrete operation URL, use it as-is.
+  if (/:executeGraphql\/?$/i.test(endpoint)) {
+    return endpoint;
+  }
+
+  // If this is just the API host, construct the operation path from env resource IDs.
+  if (/^https:\/\/firebasedataconnect\.googleapis\.com\/?$/i.test(endpoint)) {
+    return buildExecuteGraphqlEndpointFromResource();
+  }
+
+  // If it starts with the API host but not the operation suffix, append it.
+  if (endpoint.startsWith("https://firebasedataconnect.googleapis.com/")) {
+    if (/\/v1(beta)?\/projects\//i.test(endpoint)) {
+      return endpoint.replace(/\/?$/, "") + ":executeGraphql";
+    }
+
     throw new Error(
-      "Missing FIREBASE_DATA_CONNECT_GRAPHQL_URL. Set it to your Data Connect GraphQL endpoint URL."
+      "FIREBASE_DATA_CONNECT_GRAPHQL_URL must be either the full executeGraphql URL or the API host with resource IDs configured."
     );
   }
 
-  return endpoint.trim();
+  // Last resort: accept custom URLs (proxy/gateway) as-is.
+  if (/^https?:\/\//i.test(endpoint)) {
+    return endpoint;
+  }
+
+  throw new Error(
+    "FIREBASE_DATA_CONNECT_GRAPHQL_URL is not a valid URL."
+  );
+}
+
+function buildExecuteGraphqlEndpointFromResource() {
+  const project = process.env.FIREBASE_DATA_CONNECT_PROJECT_ID?.trim() || "";
+  const location = process.env.FIREBASE_DATA_CONNECT_LOCATION?.trim() || "";
+  const service = process.env.FIREBASE_DATA_CONNECT_SERVICE_ID?.trim() || "";
+  const connector = process.env.FIREBASE_DATA_CONNECT_CONNECTOR_ID?.trim() || "";
+
+  if (!project || !location || !service || !connector) {
+    throw new Error(
+      "Missing Data Connect endpoint config. Set FIREBASE_DATA_CONNECT_GRAPHQL_URL to full ...:executeGraphql URL, or set FIREBASE_DATA_CONNECT_PROJECT_ID, FIREBASE_DATA_CONNECT_LOCATION, FIREBASE_DATA_CONNECT_SERVICE_ID, and FIREBASE_DATA_CONNECT_CONNECTOR_ID."
+    );
+  }
+
+  return `https://firebasedataconnect.googleapis.com/v1beta/projects/${project}/locations/${location}/services/${service}/connectors/${connector}:executeGraphql`;
 }
 
 function getAuthClient() {
@@ -54,13 +97,32 @@ function getAuthClient() {
     );
   }
 
+  const privateKey = normalizePrivateKey(sa.private_key);
+  if (!isPemPrivateKey(privateKey)) {
+    throw new Error(
+      "Service account private_key is not a valid PEM key. Ensure FIREBASE_SERVICE_ACCOUNT_JSON contains the full key with BEGIN/END markers and newline escapes."
+    );
+  }
+
   authClient = new JWT({
     email: sa.client_email,
-    key: sa.private_key,
+    key: privateKey,
     scopes: ["https://www.googleapis.com/auth/cloud-platform"],
   });
 
   return authClient;
+}
+
+function normalizePrivateKey(value: string) {
+  const trimmed = value.trim().replace(/^"|"$/g, "");
+  return trimmed.replace(/\\n/g, "\n");
+}
+
+function isPemPrivateKey(value: string) {
+  return (
+    value.includes("-----BEGIN PRIVATE KEY-----") &&
+    value.includes("-----END PRIVATE KEY-----")
+  );
 }
 
 async function getAccessToken() {
@@ -82,8 +144,16 @@ export function resolveDataConnectSource() {
       ? "DATA_CONNECT_GRAPHQL_URL"
       : "none";
 
+  const hasResourceParts = Boolean(
+    process.env.FIREBASE_DATA_CONNECT_PROJECT_ID &&
+      process.env.FIREBASE_DATA_CONNECT_LOCATION &&
+      process.env.FIREBASE_DATA_CONNECT_SERVICE_ID &&
+      process.env.FIREBASE_DATA_CONNECT_CONNECTOR_ID
+  );
+
   return {
     endpointSource,
+    hasResourceParts,
     hasServiceAccount: Boolean(process.env.FIREBASE_SERVICE_ACCOUNT_JSON),
   };
 }
@@ -117,8 +187,13 @@ export async function executeDataConnect(
         errors?: Array<{ message?: string }>;
       };
     } catch {
+      const endpointHint = endpoint.slice(0, 120);
+      const commonHint =
+        response.status === 404
+          ? "The endpoint is likely not a full Data Connect executeGraphql URL. Use .../v1beta/projects/{project}/locations/{location}/services/{service}/connectors/{connector}:executeGraphql or provide project/location/service/connector env vars."
+          : "";
       throw new Error(
-        `Data Connect returned non-JSON response (${response.status}): ${rawText.slice(
+        `Data Connect returned non-JSON response (${response.status}) from ${endpointHint}. ${commonHint} ${rawText.slice(
           0,
           160
         )}`
