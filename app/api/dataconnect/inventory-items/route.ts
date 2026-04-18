@@ -18,6 +18,20 @@ type SaveInventoryItemsBody = {
   items?: InventoryItemRow[];
 };
 
+type StudentInventoryItem = {
+  id: string;
+  shelfId: string | null;
+  name: string;
+  brand: string;
+  quantity: number;
+  category: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+  description: string | null;
+  photoUrl: string | null;
+  size: string | null;
+};
+
 type NormalizedRow = {
   id: string;
   shelfId: string | null;
@@ -61,6 +75,24 @@ mutation InsertInventoryItem(
       updatedAt: $updatedAt
     }
   )
+}
+`.trim();
+
+const DEFAULT_LIST_QUERY = `
+query StudentInventory {
+  inventoryItems(limit: __LIMIT__) {
+    id
+    shelfId
+    name
+    brand
+    quantity
+    category
+    createdAt
+    updatedAt
+    description
+    photoUrl
+    size
+  }
 }
 `.trim();
 
@@ -149,6 +181,102 @@ function inferSavedCount(data: Record<string, unknown> | null, fallbackCount: nu
   }
 
   return fallbackCount;
+}
+
+function normalizeListLimit(value: string | null) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return 200;
+  }
+  return Math.min(500, Math.floor(parsed));
+}
+
+function readString(value: unknown) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed || null;
+}
+
+function normalizeStudentInventoryItem(value: unknown): StudentInventoryItem | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const row = value as Record<string, unknown>;
+  const name = readString(row.name);
+  if (!name) {
+    return null;
+  }
+
+  const quantityRaw = Number(row.quantity);
+  const quantity = Number.isFinite(quantityRaw) ? Math.max(0, Math.floor(quantityRaw)) : 0;
+
+  return {
+    id: readString(row.id) || randomUUID(),
+    shelfId: readString(row.shelfId),
+    name,
+    brand: readString(row.brand) || "Unknown",
+    quantity,
+    category: readString(row.category),
+    createdAt: readString(row.createdAt),
+    updatedAt: readString(row.updatedAt),
+    description: readString(row.description),
+    photoUrl: readString(row.photoUrl),
+    size: readString(row.size),
+  };
+}
+
+function toEpoch(value: string | null) {
+  if (!value) {
+    return 0;
+  }
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function extractItemRows(data: Record<string, unknown> | null) {
+  if (!data) {
+    return [];
+  }
+
+  const direct = data.inventoryItems;
+  if (Array.isArray(direct)) {
+    return direct;
+  }
+
+  for (const value of Object.values(data)) {
+    if (Array.isArray(value)) {
+      return value;
+    }
+  }
+
+  return [];
+}
+
+export async function GET(request: Request) {
+  try {
+    const url = new URL(request.url);
+    const limit = normalizeListLimit(url.searchParams.get("limit"));
+    const customQuery = process.env.FIREBASE_DATA_CONNECT_LIST_QUERY?.trim();
+    const query = customQuery || DEFAULT_LIST_QUERY.replace("__LIMIT__", String(limit));
+
+    const { data } = await executeDataConnect(query);
+    const items = extractItemRows(data)
+      .map(normalizeStudentInventoryItem)
+      .filter((row): row is StudentInventoryItem => row !== null)
+      .sort((a, b) => toEpoch(b.updatedAt) - toEpoch(a.updatedAt));
+
+    return Response.json({ items, count: items.length });
+  } catch (error) {
+    const message =
+      error instanceof Error
+        ? error.message
+        : "Failed to fetch inventory items from Data Connect.";
+
+    return Response.json({ error: message }, { status: 500 });
+  }
 }
 
 export async function POST(request: Request) {
