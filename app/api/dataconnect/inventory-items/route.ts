@@ -1,4 +1,4 @@
-import { getPostgresPool } from "@/lib/postgres";
+import { executeDataConnect } from "@/lib/dataconnect";
 
 type InventoryItemRow = {
   sku?: string | null;
@@ -18,7 +18,17 @@ type NormalizedRow = {
   quantity: number;
   size: string | null;
   description: string | null;
+  createdAt: string;
+  updatedAt: string;
 };
+
+const DEFAULT_INSERT_MUTATION = `
+mutation InsertInventoryItems($items: [InventoryItemInsertInput!]!) {
+  inventoryItem_insertMany(data: $items) {
+    affectedCount
+  }
+}
+`.trim();
 
 function normalizeItem(item: InventoryItemRow): NormalizedRow | null {
   const name = item.name?.trim() || "";
@@ -30,6 +40,7 @@ function normalizeItem(item: InventoryItemRow): NormalizedRow | null {
   const sku = item.sku?.trim() || "";
   const quantityRaw = Number(item.quantity);
   const quantity = Number.isFinite(quantityRaw) && quantityRaw > 0 ? Math.floor(quantityRaw) : 0;
+  const nowIso = new Date().toISOString();
 
   return {
     name,
@@ -37,7 +48,38 @@ function normalizeItem(item: InventoryItemRow): NormalizedRow | null {
     quantity,
     size,
     description: item.description?.trim() || null,
+    createdAt: nowIso,
+    updatedAt: nowIso,
   };
+}
+
+function inferSavedCount(data: Record<string, unknown> | null, fallbackCount: number) {
+  if (!data) {
+    return fallbackCount;
+  }
+
+  for (const value of Object.values(data)) {
+    if (!value || typeof value !== "object") {
+      continue;
+    }
+
+    const record = value as Record<string, unknown>;
+    const candidateKeys = [
+      "affectedCount",
+      "insertedCount",
+      "count",
+      "totalCount",
+    ];
+
+    for (const key of candidateKeys) {
+      const candidate = record[key];
+      if (typeof candidate === "number" && Number.isFinite(candidate)) {
+        return candidate;
+      }
+    }
+  }
+
+  return fallbackCount;
 }
 
 export async function POST(request: Request) {
@@ -57,42 +99,20 @@ export async function POST(request: Request) {
       );
     }
 
-    const pool = getPostgresPool();
-    const client = await pool.connect();
+    const mutation =
+      process.env.FIREBASE_DATA_CONNECT_INSERT_MUTATION?.trim() ||
+      DEFAULT_INSERT_MUTATION;
 
-    try {
-      await client.query("BEGIN");
+    const { data } = await executeDataConnect(mutation, {
+      items: normalized,
+    });
 
-      for (const item of normalized) {
-        await client.query(
-          `INSERT INTO "InventoryItem" ("name", "brand", "quantity", "createdAt", "updatedAt", "description", "size")
-           VALUES ($1, $2, $3, NOW(), NOW(), $4, $5)`,
-          [item.name, item.brand, item.quantity, item.description, item.size]
-        );
-      }
-
-      await client.query("COMMIT");
-    } catch (error) {
-      await client.query("ROLLBACK");
-      throw error;
-    } finally {
-      client.release();
-    }
-
-    return Response.json({ savedCount: normalized.length });
+    return Response.json({ savedCount: inferSavedCount(data, normalized.length) });
   } catch (error) {
-    const rawMessage =
+    const message =
       error instanceof Error
         ? error.message
-        : "Failed to save inventory items to Data Connect Postgres.";
-
-    const isLocalRefused =
-      /ECONNREFUSED/i.test(rawMessage) &&
-      /(127\.0\.0\.1|localhost):9399/.test(rawMessage);
-
-    const message = isLocalRefused
-      ? "Could not reach local SQL Connect at 127.0.0.1:9399. Start your Firebase Data Connect SQL tunnel/emulator for local dev, or set FIREBASE_DATA_CONNECT_POSTGRES_URL (or DATABASE_URL) in production/Vercel."
-      : rawMessage;
+        : "Failed to save inventory items through Data Connect.";
 
     return Response.json({ error: message }, { status: 500 });
   }
