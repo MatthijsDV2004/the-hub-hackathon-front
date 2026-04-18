@@ -3,6 +3,7 @@ type AnalyzeRequestBody = {
   prompt?: string;
   imageBase64?: string;
   mimeType?: string;
+  responseMimeType?: string;
 };
 
 type GeminiResponse = {
@@ -32,6 +33,7 @@ export async function POST(request: Request) {
     const imageBase64 = body.imageBase64?.trim();
     const mimeType = body.mimeType?.trim() || "image/jpeg";
     const prompt = body.prompt?.trim() || FALLBACK_PROMPT;
+    const responseMimeType = body.responseMimeType?.trim();
 
     if (!apiKey) {
       return Response.json(
@@ -72,6 +74,7 @@ export async function POST(request: Request) {
           ],
           generationConfig: {
             temperature: 0.2,
+            ...(responseMimeType ? { responseMimeType } : {}),
           },
         }),
       }

@@ -9,6 +9,21 @@ type AnalyzeResponse = {
   error?: string;
 };
 
+type InventoryItem = {
+  itemName: string;
+  description: string;
+  packageDetails: string;
+  estimatedQuantityVisible: number;
+  category: string;
+  confidence: "high" | "medium" | "low" | string;
+};
+
+type InventorySnapshot = {
+  sceneSummary: string;
+  inventoryItems: InventoryItem[];
+  notes: string[];
+};
+
 const DEFAULT_INVENTORY_PROMPT = `
 Context:
 My school has a Basic Needs Hub where donated groceries are delivered a few times a week by local partners.
@@ -17,19 +32,63 @@ Students can receive groceries for free using their student ID, with item limits
 Task:
 Analyze this photo of Hub inventory and produce an inventory snapshot.
 
-Output format:
-1) A short scene summary (1-2 sentences).
-2) A markdown table with columns:
-   - Item Name
-   - Package Details (size/count, like "12 oz" or "5-pack")
-   - Estimated Quantity Visible
-   - Category (dry, refrigerated, frozen, beverage, produce, hygiene, other)
-   - Confidence (high/medium/low)
-3) A final section called "Notes" with:
-   - uncertainty warnings
-   - anything blocked/occluded
-   - suggestion on what photo angle would improve count accuracy
+Return valid JSON only. Do not include markdown or code fences.
+
+Use this exact schema:
+{
+  "sceneSummary": "string",
+  "inventoryItems": [
+    {
+      "itemName": "string",
+      "description": "short identifying description",
+      "packageDetails": "size/count such as 12 oz or 5-pack",
+      "estimatedQuantityVisible": 0,
+      "category": "dry|refrigerated|frozen|beverage|produce|hygiene|other",
+      "confidence": "high|medium|low"
+    }
+  ],
+  "notes": ["string"]
+}
+
+Rules:
+- estimatedQuantityVisible must be an integer.
+- If uncertain, still include best estimate and explain uncertainty in notes.
+- Include every distinct visible item type.
 `.trim();
+
+const EMPTY_SNAPSHOT: InventorySnapshot = {
+  sceneSummary: "",
+  inventoryItems: [],
+  notes: [],
+};
+
+function parseInventoryJson(raw: string): InventorySnapshot {
+  const sanitized = raw.trim().replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```$/, "").trim();
+  const parsed = JSON.parse(sanitized) as Partial<InventorySnapshot>;
+
+  const items = Array.isArray(parsed.inventoryItems)
+    ? parsed.inventoryItems.map((item) => ({
+        itemName: String(item?.itemName ?? "Unknown item"),
+        description: String(item?.description ?? ""),
+        packageDetails: String(item?.packageDetails ?? ""),
+        estimatedQuantityVisible: Number.isFinite(Number(item?.estimatedQuantityVisible))
+          ? Math.max(0, Math.round(Number(item?.estimatedQuantityVisible)))
+          : 0,
+        category: String(item?.category ?? "other"),
+        confidence: String(item?.confidence ?? "low"),
+      }))
+    : [];
+
+  const notes = Array.isArray(parsed.notes)
+    ? parsed.notes.map((note) => String(note))
+    : [];
+
+  return {
+    sceneSummary: String(parsed.sceneSummary ?? ""),
+    inventoryItems: items,
+    notes,
+  };
+}
 
 function extractApiKey(input: string): string {
   const trimmed = input.trim();
@@ -78,6 +137,7 @@ export default function InventoryPage() {
   const [envInput, setEnvInput] = useState("");
   const [prompt, setPrompt] = useState(DEFAULT_INVENTORY_PROMPT);
   const [analysis, setAnalysis] = useState("");
+  const [snapshot, setSnapshot] = useState<InventorySnapshot>(EMPTY_SNAPSHOT);
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
 
@@ -95,6 +155,7 @@ export default function InventoryPage() {
     const file = event.target.files?.[0] ?? null;
     setImageFile(file);
     setAnalysis("");
+    setSnapshot(EMPTY_SNAPSHOT);
     setError("");
 
     if (!file) {
@@ -110,6 +171,7 @@ export default function InventoryPage() {
     event.preventDefault();
     setError("");
     setAnalysis("");
+    setSnapshot(EMPTY_SNAPSHOT);
 
     if (!imageFile) {
       setError("Upload an inventory photo first.");
@@ -129,6 +191,7 @@ export default function InventoryPage() {
           prompt,
           imageBase64,
           mimeType: imageFile.type,
+          responseMimeType: "application/json",
         }),
       });
 
@@ -137,7 +200,10 @@ export default function InventoryPage() {
         throw new Error(payload.error || "Inventory parsing failed.");
       }
 
-      setAnalysis(payload.text || "No inventory output returned by the model.");
+      const rawText = payload.text || "";
+      setAnalysis(rawText);
+      const parsedSnapshot = parseInventoryJson(rawText);
+      setSnapshot(parsedSnapshot);
     } catch (submitError) {
       setError(
         submitError instanceof Error
@@ -249,11 +315,74 @@ export default function InventoryPage() {
             ) : null}
 
             <div className="rounded-xl border border-white/10 bg-slate-900/70 p-3">
-              <h2 className="mb-2 text-sm font-semibold text-slate-100">AI inventory output</h2>
-              <pre className="max-h-[24rem] overflow-auto whitespace-pre-wrap text-sm leading-relaxed text-slate-200">
-                {analysis ||
-                  "The inventory summary and item table will appear here after analysis."}
-              </pre>
+              <h2 className="mb-3 text-sm font-semibold text-slate-100">Organized inventory output</h2>
+
+              {snapshot.sceneSummary ? (
+                <p className="mb-3 rounded-lg border border-cyan-300/25 bg-cyan-300/10 px-3 py-2 text-sm text-slate-100">
+                  {snapshot.sceneSummary}
+                </p>
+              ) : (
+                <p className="mb-3 text-sm text-slate-400">
+                  The inventory summary will appear here after analysis.
+                </p>
+              )}
+
+              <div className="max-h-[20rem] overflow-auto rounded-lg border border-white/10">
+                <table className="min-w-full divide-y divide-white/10 text-left text-sm">
+                  <thead className="bg-slate-800/70 text-slate-200">
+                    <tr>
+                      <th className="px-3 py-2 font-semibold">Item</th>
+                      <th className="px-3 py-2 font-semibold">Quantity</th>
+                      <th className="px-3 py-2 font-semibold">Package</th>
+                      <th className="px-3 py-2 font-semibold">Category</th>
+                      <th className="px-3 py-2 font-semibold">Confidence</th>
+                      <th className="px-3 py-2 font-semibold">Description</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-white/10 bg-slate-900/60">
+                    {snapshot.inventoryItems.length ? (
+                      snapshot.inventoryItems.map((item, index) => (
+                        <tr key={`${item.itemName}-${index}`}>
+                          <td className="px-3 py-2 text-slate-100">{item.itemName}</td>
+                          <td className="px-3 py-2 text-slate-200">{item.estimatedQuantityVisible}</td>
+                          <td className="px-3 py-2 text-slate-200">{item.packageDetails || "-"}</td>
+                          <td className="px-3 py-2 text-slate-200">{item.category}</td>
+                          <td className="px-3 py-2 text-slate-200">{item.confidence}</td>
+                          <td className="px-3 py-2 text-slate-300">{item.description || "-"}</td>
+                        </tr>
+                      ))
+                    ) : (
+                      <tr>
+                        <td colSpan={6} className="px-3 py-4 text-center text-slate-400">
+                          No parsed items yet.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              {snapshot.notes.length ? (
+                <div className="mt-3 rounded-lg border border-emerald-300/20 bg-emerald-400/5 p-3">
+                  <h3 className="mb-1 text-sm font-semibold text-emerald-200">Notes</h3>
+                  <ul className="list-disc space-y-1 pl-5 text-sm text-slate-200">
+                    {snapshot.notes.map((note, index) => (
+                      <li key={`${note}-${index}`}>{note}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+
+              {analysis && !snapshot.inventoryItems.length && !snapshot.sceneSummary ? (
+                <details className="mt-3 rounded-lg border border-white/10 bg-slate-900/70 p-3">
+                  <summary className="cursor-pointer text-sm font-medium text-slate-200">
+                    Raw model output
+                  </summary>
+                  <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap text-xs text-slate-300">
+                    {analysis}
+                  </pre>
+                </details>
+              ) : null}
             </div>
           </section>
         </form>
