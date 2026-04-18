@@ -302,6 +302,64 @@ export default function InventoryPage() {
     }
   };
 
+  const onSendTestPayload = async () => {
+    setIsSaving(true);
+    setSaveStatus("");
+
+    try {
+      const response = await fetch("/api/dataconnect/inventory-items", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          items: [
+            {
+              sku: "TEST-WATER-12OZ",
+              name: "Bottled Water",
+              quantity: 5,
+              "package-size": "12 oz, 1 bottle",
+              description: "Test payload item for Data Connect insert verification.",
+            },
+            {
+              sku: null,
+              name: "Granola Bar",
+              quantity: 8,
+              "package-size": "1 bar",
+              description: "No SKU example from test payload.",
+            },
+          ],
+        }),
+      });
+
+      const { json, text } = await readApiPayload(response);
+      const payload = (json || {}) as {
+        savedCount?: number;
+        error?: string;
+      };
+
+      if (!response.ok) {
+        const htmlHint = text.trim().startsWith("<!DOCTYPE")
+          ? "Received HTML instead of JSON. Check API route path and deployment logs."
+          : text.slice(0, 160);
+        throw new Error(
+          payload.error ||
+            `Test payload failed (${response.status}). ${htmlHint}`
+        );
+      }
+
+      setSaveStatus(`Test payload saved ${payload.savedCount ?? 0} items to InventoryItem.`);
+    } catch (saveError) {
+      setSaveStatus(
+        saveError instanceof Error
+          ? saveError.message
+          : "Unexpected error while sending test payload."
+      );
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   return (
     <div className="relative min-h-screen overflow-hidden bg-slate-950 px-4 py-8 text-slate-100 md:px-8">
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_15%_15%,rgba(34,197,94,0.2),transparent_35%),radial-gradient(circle_at_85%_15%,rgba(6,182,212,0.25),transparent_40%),linear-gradient(120deg,#020617,#0f172a_45%,#1e293b)]" />
@@ -459,6 +517,14 @@ export default function InventoryPage() {
                   className="inline-flex items-center justify-center rounded-xl border border-cyan-300/40 bg-cyan-300/15 px-4 py-2 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-300/20 disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   {isSaving ? "Sending to Data Connect..." : "Send Items To Data Connect"}
+                </button>
+                <button
+                  type="button"
+                  onClick={onSendTestPayload}
+                  disabled={isSaving}
+                  className="inline-flex items-center justify-center rounded-xl border border-emerald-300/40 bg-emerald-300/15 px-4 py-2 text-sm font-semibold text-emerald-100 transition hover:bg-emerald-300/20 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {isSaving ? "Sending test payload..." : "Send Test Payload"}
                 </button>
                 {saveStatus ? (
                   <p className="text-sm text-slate-300">{saveStatus}</p>
