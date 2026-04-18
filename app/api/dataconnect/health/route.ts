@@ -4,7 +4,7 @@ export async function GET() {
   const source = resolveDataConnectSource();
   const healthQuery =
     process.env.FIREBASE_DATA_CONNECT_HEALTH_QUERY?.trim() ||
-    "query DataConnectHealth { __typename }";
+    "query DataConnectHealth { inventoryItems(limit: 1) { id } }";
 
   try {
     await executeDataConnect(healthQuery);

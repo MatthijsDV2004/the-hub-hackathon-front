@@ -74,15 +74,14 @@ function buildExecuteGraphqlEndpointFromResource() {
   const project = process.env.FIREBASE_DATA_CONNECT_PROJECT_ID?.trim() || "";
   const location = process.env.FIREBASE_DATA_CONNECT_LOCATION?.trim() || "";
   const service = process.env.FIREBASE_DATA_CONNECT_SERVICE_ID?.trim() || "";
-  const connector = process.env.FIREBASE_DATA_CONNECT_CONNECTOR_ID?.trim() || "";
 
-  if (!project || !location || !service || !connector) {
+  if (!project || !location || !service) {
     throw new Error(
-      "Missing Data Connect endpoint config. Set FIREBASE_DATA_CONNECT_GRAPHQL_URL to full ...:executeGraphql URL, or set FIREBASE_DATA_CONNECT_PROJECT_ID, FIREBASE_DATA_CONNECT_LOCATION, FIREBASE_DATA_CONNECT_SERVICE_ID, and FIREBASE_DATA_CONNECT_CONNECTOR_ID."
+      "Missing Data Connect endpoint config. Set FIREBASE_DATA_CONNECT_GRAPHQL_URL to full .../services/{service}:executeGraphql URL, or set FIREBASE_DATA_CONNECT_PROJECT_ID, FIREBASE_DATA_CONNECT_LOCATION, and FIREBASE_DATA_CONNECT_SERVICE_ID."
     );
   }
 
-  return `https://firebasedataconnect.googleapis.com/v1beta/projects/${project}/locations/${location}/services/${service}/connectors/${connector}:executeGraphql`;
+  return `https://firebasedataconnect.googleapis.com/v1beta/projects/${project}/locations/${location}/services/${service}:executeGraphql`;
 }
 
 function getAuthClient() {
@@ -144,16 +143,16 @@ export function resolveDataConnectSource() {
       ? "DATA_CONNECT_GRAPHQL_URL"
       : "none";
 
-  const hasResourceParts = Boolean(
+  const hasServiceResourceParts = Boolean(
     process.env.FIREBASE_DATA_CONNECT_PROJECT_ID &&
       process.env.FIREBASE_DATA_CONNECT_LOCATION &&
-      process.env.FIREBASE_DATA_CONNECT_SERVICE_ID &&
-      process.env.FIREBASE_DATA_CONNECT_CONNECTOR_ID
+      process.env.FIREBASE_DATA_CONNECT_SERVICE_ID
   );
 
   return {
     endpointSource,
-    hasResourceParts,
+    hasServiceResourceParts,
+    hasConnectorId: Boolean(process.env.FIREBASE_DATA_CONNECT_CONNECTOR_ID),
     hasServiceAccount: Boolean(process.env.FIREBASE_SERVICE_ACCOUNT_JSON),
   };
 }
@@ -190,7 +189,7 @@ export async function executeDataConnect(
       const endpointHint = endpoint.slice(0, 120);
       const commonHint =
         response.status === 404
-          ? "The endpoint is likely not a full Data Connect executeGraphql URL. Use .../v1beta/projects/{project}/locations/{location}/services/{service}/connectors/{connector}:executeGraphql or provide project/location/service/connector env vars."
+          ? "The endpoint is likely not a valid Data Connect service executeGraphql URL. Use .../v1beta/projects/{project}/locations/{location}/services/{service}:executeGraphql or provide project/location/service env vars."
           : "";
       throw new Error(
         `Data Connect returned non-JSON response (${response.status}) from ${endpointHint}. ${commonHint} ${rawText.slice(

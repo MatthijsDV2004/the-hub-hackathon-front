@@ -271,7 +271,8 @@ export default function InventoryPage() {
             name: item.itemName,
             quantity: item.estimatedQuantityVisible,
             "package-size": item.packageDetails,
-              description: item.description,
+            category: item.category,
+            description: item.description,
           })),
         }),
       });
@@ -321,6 +322,7 @@ export default function InventoryPage() {
               name: "Bottled Water",
               quantity: 5,
               "package-size": "12 oz, 1 bottle",
+              category: "beverage",
               description: "Test payload item for Data Connect insert verification.",
             },
             {
@@ -328,6 +330,7 @@ export default function InventoryPage() {
               name: "Granola Bar",
               quantity: 8,
               "package-size": "1 bar",
+              category: "dry",
               description: "No SKU example from test payload.",
             },
           ],
