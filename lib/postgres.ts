@@ -18,10 +18,10 @@ function resolveConnectionString() {
   );
 
   return (
-    localSqlConnect ||
     process.env.FIREBASE_DATA_CONNECT_POSTGRES_URL ||
     process.env.DATABASE_URL ||
     process.env.POSTGRES_URL ||
+    localSqlConnect ||
     ""
   );
 }
@@ -61,6 +61,7 @@ export function getPostgresPool() {
 
   pool = new Pool({
     connectionString,
+    connectionTimeoutMillis: 5000,
     ...(useSsl ? { ssl: { rejectUnauthorized: false } } : {}),
   });
 

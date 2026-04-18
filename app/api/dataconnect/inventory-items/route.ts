@@ -81,10 +81,19 @@ export async function POST(request: Request) {
 
     return Response.json({ savedCount: normalized.length });
   } catch (error) {
-    const message =
+    const rawMessage =
       error instanceof Error
         ? error.message
         : "Failed to save inventory items to Data Connect Postgres.";
+
+    const isLocalRefused =
+      /ECONNREFUSED/i.test(rawMessage) &&
+      /(127\.0\.0\.1|localhost):9399/.test(rawMessage);
+
+    const message = isLocalRefused
+      ? "Could not reach local SQL Connect at 127.0.0.1:9399. Start your Firebase Data Connect SQL tunnel/emulator for local dev, or set FIREBASE_DATA_CONNECT_POSTGRES_URL (or DATABASE_URL) in production/Vercel."
+      : rawMessage;
+
     return Response.json({ error: message }, { status: 500 });
   }
 }
