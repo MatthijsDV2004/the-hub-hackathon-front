@@ -51,7 +51,9 @@ package-lock.json
 
 # firebase
 .firebase
-dataconnect
+/dataconnect
+!/app/api/dataconnect
+!/app/api/dataconnect/**
 
 # typescript
 *.tsbuildinfo
