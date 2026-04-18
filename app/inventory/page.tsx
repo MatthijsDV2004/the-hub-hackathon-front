@@ -11,6 +11,7 @@ type AnalyzeResponse = {
 
 type InventoryItem = {
   sku?: string;
+  brand: string;
   itemName: string;
   description: string;
   packageDetails: string;
@@ -41,6 +42,7 @@ Use this exact schema:
   "inventoryItems": [
     {
       "sku": "string or null",
+      "brand": "string",
       "itemName": "string",
       "description": "short identifying description",
       "packageDetails": "size/count such as 12 oz or 5-pack",
@@ -55,6 +57,7 @@ Use this exact schema:
 Rules:
 - estimatedQuantityVisible must be an integer.
 - sku is optional. Use null when not visible.
+- brand should be included when visible; otherwise provide a best estimate.
 - If uncertain, still include best estimate and explain uncertainty in notes.
 - Include every distinct visible item type.
 `.trim();
@@ -76,6 +79,7 @@ function parseInventoryJson(raw: string): InventorySnapshot {
           item?.sku == null || String(item?.sku).trim() === ""
             ? ""
             : String(item?.sku),
+        brand: String(item?.brand ?? item?.sku ?? "Unknown"),
         description: String(item?.description ?? ""),
         packageDetails: String(item?.packageDetails ?? ""),
         estimatedQuantityVisible: Number.isFinite(Number(item?.estimatedQuantityVisible))
@@ -138,6 +142,19 @@ function toBase64Data(file: File): Promise<string> {
   });
 }
 
+function buildPlaceholderPhotoUrl(file: File | null, itemName: string, index: number) {
+  const fileToken = (file?.name || "inventory-photo")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  const itemToken = itemName
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  const now = Date.now();
+  return `https://images.example.com/hub/${fileToken || "photo"}-${itemToken || "item"}-${now}-${index + 1}.jpg`;
+}
+
 async function readApiPayload(response: Response): Promise<{
   json: Record<string, unknown> | null;
   text: string;
@@ -162,6 +179,7 @@ export default function InventoryPage() {
   const [prompt, setPrompt] = useState(DEFAULT_INVENTORY_PROMPT);
   const [analysis, setAnalysis] = useState("");
   const [snapshot, setSnapshot] = useState<InventorySnapshot>(EMPTY_SNAPSHOT);
+  const [shelfIdInput, setShelfIdInput] = useState("");
   const [error, setError] = useState("");
   const [saveStatus, setSaveStatus] = useState("");
   const [isSaving, setIsSaving] = useState(false);
@@ -266,13 +284,16 @@ export default function InventoryPage() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          items: snapshot.inventoryItems.map((item) => ({
+          items: snapshot.inventoryItems.map((item, index) => ({
             sku: item.sku || null,
+            shelfId: shelfIdInput.trim() || null,
             name: item.itemName,
+            brand: item.brand,
             quantity: item.estimatedQuantityVisible,
             "package-size": item.packageDetails,
             category: item.category,
             description: item.description,
+            photoUrl: buildPlaceholderPhotoUrl(imageFile, item.itemName, index),
           })),
         }),
       });
@@ -319,19 +340,25 @@ export default function InventoryPage() {
           items: [
             {
               sku: "TEST-WATER-12OZ",
+              shelfId: null,
               name: "Bottled Water",
+              brand: "Aqua Pure",
               quantity: 5,
               "package-size": "12 oz, 1 bottle",
               category: "beverage",
               description: "Test payload item for Data Connect insert verification.",
+              photoUrl: "https://images.example.com/hub/test-water-1.jpg",
             },
             {
               sku: null,
+              shelfId: null,
               name: "Granola Bar",
+              brand: "Campus Pantry",
               quantity: 8,
               "package-size": "1 bar",
               category: "dry",
               description: "No SKU example from test payload.",
+              photoUrl: "https://images.example.com/hub/test-granola-2.jpg",
             },
           ],
         }),
@@ -478,6 +505,20 @@ export default function InventoryPage() {
             <p className="text-xs text-slate-400">
               Leave this blank to use GEMINI_API_KEY / GOOGLE_API_KEY from Vercel env.
             </p>
+
+            <label className="block text-sm font-medium text-slate-200" htmlFor="shelf-id-input">
+              Shelf ID (optional UUID)
+            </label>
+            <input
+              id="shelf-id-input"
+              value={shelfIdInput}
+              onChange={(event) => setShelfIdInput(event.target.value)}
+              placeholder="2f3b8f2a-9f82-4fbf-b1ce-3d8d2a73e7d5"
+              className="w-full rounded-xl border border-white/15 bg-slate-900/70 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-400 focus:border-cyan-300/70 focus:outline-none"
+            />
+            <p className="text-xs text-slate-400">
+              Provide this only if you want items linked to an existing Shelf record.
+            </p>
           </section>
 
           <section className="space-y-4 rounded-2xl border border-white/10 bg-slate-950/35 p-4 md:p-5">
@@ -525,6 +566,7 @@ export default function InventoryPage() {
                     <tr>
                       <th className="px-3 py-2 font-semibold">SKU</th>
                       <th className="px-3 py-2 font-semibold">Item</th>
+                      <th className="px-3 py-2 font-semibold">Brand</th>
                       <th className="px-3 py-2 font-semibold">Quantity</th>
                       <th className="px-3 py-2 font-semibold">Package</th>
                       <th className="px-3 py-2 font-semibold">Category</th>
@@ -538,6 +580,7 @@ export default function InventoryPage() {
                         <tr key={`${item.itemName}-${index}`}>
                           <td className="px-3 py-2 text-slate-300">{item.sku || "-"}</td>
                           <td className="px-3 py-2 text-slate-100">{item.itemName}</td>
+                          <td className="px-3 py-2 text-slate-200">{item.brand || "Unknown"}</td>
                           <td className="px-3 py-2 text-slate-200">{item.estimatedQuantityVisible}</td>
                           <td className="px-3 py-2 text-slate-200">{item.packageDetails || "-"}</td>
                           <td className="px-3 py-2 text-slate-200">{item.category}</td>
@@ -547,7 +590,7 @@ export default function InventoryPage() {
                       ))
                     ) : (
                       <tr>
-                        <td colSpan={7} className="px-3 py-4 text-center text-slate-400">
+                        <td colSpan={8} className="px-3 py-4 text-center text-slate-400">
                           No parsed items yet.
                         </td>
                       </tr>
