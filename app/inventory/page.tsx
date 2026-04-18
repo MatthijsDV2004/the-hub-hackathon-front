@@ -165,6 +165,8 @@ export default function InventoryPage() {
   const [error, setError] = useState("");
   const [saveStatus, setSaveStatus] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+  const [isCheckingConnection, setIsCheckingConnection] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState("");
   const [isLoading, setIsLoading] = useState(false);
 
   const extractedKey = useMemo(() => extractApiKey(envInput), [envInput]);
@@ -360,6 +362,48 @@ export default function InventoryPage() {
     }
   };
 
+  const onCheckDataConnect = async () => {
+    setIsCheckingConnection(true);
+    setConnectionStatus("");
+
+    try {
+      const response = await fetch("/api/dataconnect/health", {
+        method: "GET",
+      });
+
+      const { json, text } = await readApiPayload(response);
+      const payload = (json || {}) as {
+        ok?: boolean;
+        source?: string;
+        message?: string;
+      };
+
+      if (!response.ok || !payload.ok) {
+        const fallback = text.trim().startsWith("<!DOCTYPE")
+          ? "Received HTML instead of JSON. Check API route deployment."
+          : text.slice(0, 160);
+        setConnectionStatus(
+          `Connection failed: ${payload.message || fallback || "Unknown error"}`
+        );
+        return;
+      }
+
+      setConnectionStatus(
+        `Connected. Source: ${payload.source || "unknown"}. ${
+          payload.message || ""
+        }`
+      );
+    } catch (checkError) {
+      setConnectionStatus(
+        checkError instanceof Error
+          ? `Connection check failed: ${checkError.message}`
+          : "Connection check failed."
+      );
+    } finally {
+      setIsCheckingConnection(false);
+    }
+  };
+
   return (
     <div className="relative min-h-screen overflow-hidden bg-slate-950 px-4 py-8 text-slate-100 md:px-8">
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_15%_15%,rgba(34,197,94,0.2),transparent_35%),radial-gradient(circle_at_85%_15%,rgba(6,182,212,0.25),transparent_40%),linear-gradient(120deg,#020617,#0f172a_45%,#1e293b)]" />
@@ -512,6 +556,16 @@ export default function InventoryPage() {
               <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
                 <button
                   type="button"
+                  onClick={onCheckDataConnect}
+                  disabled={isCheckingConnection || isSaving}
+                  className="inline-flex items-center justify-center rounded-xl border border-slate-300/40 bg-slate-300/10 px-4 py-2 text-sm font-semibold text-slate-100 transition hover:bg-slate-300/20 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {isCheckingConnection
+                    ? "Checking Data Connect..."
+                    : "Check Data Connect"}
+                </button>
+                <button
+                  type="button"
                   onClick={onSendToDataConnect}
                   disabled={isSaving || !snapshot.inventoryItems.length}
                   className="inline-flex items-center justify-center rounded-xl border border-cyan-300/40 bg-cyan-300/15 px-4 py-2 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-300/20 disabled:cursor-not-allowed disabled:opacity-40"
@@ -534,6 +588,10 @@ export default function InventoryPage() {
                   </p>
                 )}
               </div>
+
+              {connectionStatus ? (
+                <p className="mt-2 text-sm text-slate-300">{connectionStatus}</p>
+              ) : null}
 
               {snapshot.notes.length ? (
                 <div className="mt-3 rounded-lg border border-emerald-300/20 bg-emerald-400/5 p-3">
