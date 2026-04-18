@@ -9,6 +9,11 @@ type AnalyzeResponse = {
   error?: string;
 };
 
+type CloudinaryUploadResponse = {
+  secureUrl?: string;
+  error?: string;
+};
+
 type InventoryItem = {
   sku?: string;
   brand: string;
@@ -118,19 +123,6 @@ function toBase64Data(file: File): Promise<string> {
   });
 }
 
-function buildPlaceholderPhotoUrl(file: File | null, itemName: string, index: number) {
-  const fileToken = (file?.name || "inventory-photo")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  const itemToken = itemName
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  const now = Date.now();
-  return `https://images.example.com/hub/${fileToken || "photo"}-${itemToken || "item"}-${now}-${index + 1}.jpg`;
-}
-
 async function readApiPayload(response: Response): Promise<{
   json: Record<string, unknown> | null;
   text: string;
@@ -146,6 +138,44 @@ async function readApiPayload(response: Response): Promise<{
   } catch {
     return { json: null, text: rawText };
   }
+}
+
+async function uploadPhotoToCloudinary(
+  imageBase64: string,
+  mimeType: string,
+  shelfName: string
+) {
+  const uploadResponse = await fetch("/api/cloudinary/upload", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      imageBase64,
+      mimeType,
+      shelfName,
+    }),
+  });
+
+  const { json: uploadJson, text: uploadText } = await readApiPayload(uploadResponse);
+  const uploadPayload = (uploadJson || {}) as CloudinaryUploadResponse;
+
+  if (!uploadResponse.ok) {
+    const details = uploadText.trim().startsWith("<!DOCTYPE")
+      ? "Received HTML instead of JSON while uploading to Cloudinary."
+      : uploadText.slice(0, 160);
+
+    throw new Error(
+      uploadPayload.error ||
+        `Failed to upload image to Cloudinary (${uploadResponse.status}). ${details}`
+    );
+  }
+
+  if (!uploadPayload.secureUrl) {
+    throw new Error("Cloudinary upload succeeded but did not return a secure URL.");
+  }
+
+  return uploadPayload.secureUrl;
 }
 
 export default function InventoryPage() {
@@ -356,6 +386,12 @@ export default function InventoryPage() {
         return;
       }
 
+      const uploadedPhotoUrl = await uploadPhotoToCloudinary(
+        imageBase64,
+        imageFile.type,
+        shelfName.trim()
+      );
+
       const saveResponse = await fetch("/api/dataconnect/inventory-items", {
         method: "POST",
         headers: {
@@ -364,7 +400,7 @@ export default function InventoryPage() {
         body: JSON.stringify({
           shelfName: shelfName.trim(),
           shelfLocationDescription: shelfLocationDescription.trim() || undefined,
-          items: parsedSnapshot.inventoryItems.map((item, index) => ({
+          items: parsedSnapshot.inventoryItems.map((item) => ({
             sku: item.sku || null,
             shelfId: null,
             name: item.itemName,
@@ -373,7 +409,7 @@ export default function InventoryPage() {
             "package-size": item.packageDetails,
             category: item.category,
             description: item.description,
-            photoUrl: buildPlaceholderPhotoUrl(imageFile, item.itemName, index),
+            photoUrl: uploadedPhotoUrl,
           })),
         }),
       });
@@ -400,7 +436,7 @@ export default function InventoryPage() {
 
       const savedShelfName = savePayload.shelf?.name || shelfName;
       setStatus(
-        `Saved ${savePayload.savedCount ?? 0} inventory rows to shelf "${savedShelfName}".`
+        `Saved ${savePayload.savedCount ?? 0} inventory rows to shelf "${savedShelfName}" with Cloudinary image storage.`
       );
     } catch (submitError) {
       setError(
