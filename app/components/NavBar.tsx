@@ -61,8 +61,9 @@ export default function NavBar() {
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    resetSessionCache();
     fetchSession().then(setUser);
-  }, []);
+  }, [pathname]);
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -274,21 +275,39 @@ export default function NavBar() {
                 )}
               </div>
             ) : (
-              <Link
-                href="/login"
-                style={{
-                  padding: "8px 16px",
-                  borderRadius: 8,
-                  background: "var(--fp-button-accent)",
-                  color: "#fff",
-                  fontSize: 13,
-                  fontWeight: 700,
-                  textDecoration: "none",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                Get Started
-              </Link>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <Link
+                  href="/login"
+                  style={{
+                    padding: "8px 14px",
+                    borderRadius: 8,
+                    border: "1px solid var(--fp-panel-border)",
+                    background: "transparent",
+                    color: "var(--fp-text-secondary)",
+                    fontSize: 13,
+                    fontWeight: 600,
+                    textDecoration: "none",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  Log in
+                </Link>
+                <Link
+                  href="/login"
+                  style={{
+                    padding: "8px 16px",
+                    borderRadius: 8,
+                    background: "var(--fp-button-accent)",
+                    color: "#fff",
+                    fontSize: 13,
+                    fontWeight: 700,
+                    textDecoration: "none",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  Get Started
+                </Link>
+              </div>
             )}
 
             {/* Hamburger */}
