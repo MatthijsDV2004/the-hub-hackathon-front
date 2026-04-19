@@ -44,7 +44,7 @@ export function getFirebaseClientAuth() {
   const config = getFirebasePublicConfig();
   if (!config) {
     throw new Error(
-      "Missing Firebase web config. Set NEXT_PUBLIC_FIREBASE_API_KEY, NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN, NEXT_PUBLIC_FIREBASE_PROJECT_ID, and NEXT_PUBLIC_FIREBASE_APP_ID."
+      "Missing Firebase web config. Set FIREBASE_API_KEY, FIREBASE_AUTH_DOMAIN, FIREBASE_PROJECT_ID, and FIREBASE_APP_ID."
     );
   }
 

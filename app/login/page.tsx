@@ -212,9 +212,8 @@ function LoginContent() {
 
         {!firebaseConfigured ? (
           <p className="mt-4 rounded-lg border border-red-300/30 bg-red-500/10 px-3 py-2 text-sm text-red-200">
-            Firebase web config is missing. Add NEXT_PUBLIC_FIREBASE_API_KEY,
-            NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN, NEXT_PUBLIC_FIREBASE_PROJECT_ID, and
-            NEXT_PUBLIC_FIREBASE_APP_ID.
+            Firebase web config is missing. Add FIREBASE_API_KEY, FIREBASE_AUTH_DOMAIN,
+            FIREBASE_PROJECT_ID, and FIREBASE_APP_ID.
           </p>
         ) : null}
 
