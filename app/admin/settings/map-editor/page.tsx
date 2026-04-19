@@ -1,7 +1,7 @@
 'use client'
 
 import type React from 'react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import QRCode from 'qrcode'
 import { QueryFetchPolicy } from 'firebase/data-connect'
 import MapZoneEditor, { SavePayload, MapZoneEditorRef } from '../components/MapZoneEditor'
@@ -25,33 +25,65 @@ const CATEGORY_LABELS: Record<string, string> = {
   misc_non_food: 'Misc / Non-Food',
 }
 
+function mintShelfUid(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID().replace(/-/g, '').slice(0, 8)
+  }
+  return Math.random().toString(36).slice(2, 10)
+}
+
 function QRCodesModal({
   sections,
   planId,
+  isLivePlan,
   onClose,
 }: {
   sections: SavePayload['sections']
   planId: string | null
+  isLivePlan: boolean
   onClose: () => void
 }) {
   const [qrUrls, setQrUrls] = useState<Record<string, string>>({})
   const [generating, setGenerating] = useState(true)
 
+  // Each QR must encode a real shelf_uid that exists on the deployed floor
+  // plan. The editor mints uids on hydrate and the parent saves before opening
+  // this modal, so sections should always carry a valid `shelf_uid`. As a last
+  // resort safety net we mint a fresh one rather than emitting `legacy-N`,
+  // which would never resolve to a zone on the student page.
+  const qrEntries = useMemo(() => {
+    return sections.map((section, index) => {
+      const rawShelfUid = section.shelf_uid?.trim() || ''
+      const shelfUid = rawShelfUid ? rawShelfUid.slice(0, 64) : mintShelfUid()
+
+      return {
+        entryKey: `${shelfUid}-${index}`,
+        shelfUid,
+        catId: section.cat_id,
+        label: `Shelf ${index + 1}`,
+        isFallbackUid: !rawShelfUid,
+      }
+    })
+  }, [sections])
+
+  const hasFallbackUids = qrEntries.some(entry => entry.isFallbackUid)
+
   useEffect(() => {
     async function generate() {
       setGenerating(true)
-      const seen = new Set<string>()
       const urls: Record<string, string> = {}
-      for (const section of sections) {
-        const catId = section.cat_id
-        if (seen.has(catId)) continue
-        seen.add(catId)
+
+      for (const entry of qrEntries) {
         const payload = JSON.stringify({
-          category: catId,
-          planId: planId ?? 'unknown',
+          kind: 'hub-shelf',
+          version: 1,
+          planId: planId ?? null,
+          shelfUid: entry.shelfUid,
+          category: entry.catId,
         })
+
         try {
-          urls[catId] = await QRCode.toDataURL(payload, {
+          urls[entry.entryKey] = await QRCode.toDataURL(payload, {
             width: 240,
             margin: 2,
             color: { dark: '#0f1825', light: '#ffffff' },
@@ -60,22 +92,23 @@ function QRCodesModal({
           // skip failed QRs
         }
       }
+
       setQrUrls(urls)
       setGenerating(false)
     }
-    void generate()
-  }, [sections, planId])
 
-  const downloadQR = (catId: string) => {
-    const dataUrl = qrUrls[catId]
+    void generate()
+  }, [qrEntries, planId])
+
+  const downloadQR = (entryKey: string, shelfUid: string) => {
+    const dataUrl = qrUrls[entryKey]
     if (!dataUrl) return
+    const safeShelfUid = shelfUid.replace(/[^a-zA-Z0-9_-]+/g, '-').slice(0, 48) || 'unknown'
     const a = document.createElement('a')
     a.href = dataUrl
-    a.download = `qr-${catId}.png`
+    a.download = `qr-shelf-${safeShelfUid}.png`
     a.click()
   }
-
-  const uniqueCategories = [...new Set(sections.map(s => s.cat_id))]
 
   return (
     <div
@@ -129,19 +162,53 @@ function QRCodesModal({
           Print and attach these QR codes to their shelf zones. When photographed during an inventory upload, the AI can associate items with the correct floor plan location.
         </p>
 
+        {!isLivePlan && (
+          <div
+            style={{
+              padding: '10px 14px',
+              borderRadius: 10,
+              border: '1px solid #f5b16a',
+              background: 'rgba(245,177,106,0.12)',
+              color: '#a05a00',
+              fontSize: 12,
+              fontWeight: 600,
+              lineHeight: 1.5,
+            }}
+          >
+            Heads up: this layout is not the deployed plan. Hit <strong>Deploy</strong> first so the QR codes you print match the shelves students see — otherwise inventory uploads will reject the QR and ask for a manual shelf pick.
+          </div>
+        )}
+
+        {hasFallbackUids && (
+          <div
+            style={{
+              padding: '10px 14px',
+              borderRadius: 10,
+              border: '1px solid #dc2626',
+              background: 'rgba(220,38,38,0.1)',
+              color: '#991b1b',
+              fontSize: 12,
+              fontWeight: 600,
+              lineHeight: 1.5,
+            }}
+          >
+            Some shelves were missing a stable id, so we generated one for the QR. Save the layout before printing so the same id is stored on the deployed plan.
+          </div>
+        )}
+
         {generating ? (
           <p style={{ textAlign: 'center', color: 'var(--fp-text-muted)', fontSize: 14, padding: '20px 0' }}>
             Generating QR codes…
           </p>
-        ) : uniqueCategories.length === 0 ? (
+        ) : qrEntries.length === 0 ? (
           <p style={{ textAlign: 'center', color: 'var(--fp-text-muted)', fontSize: 14, padding: '20px 0' }}>
             No shelf zones in this layout. Add zones to generate QR codes.
           </p>
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 16 }}>
-            {uniqueCategories.map(catId => (
+            {qrEntries.map(entry => (
               <div
-                key={catId}
+                key={entry.entryKey}
                 style={{
                   background: 'var(--fp-surface-secondary)',
                   border: '1px solid var(--fp-panel-border)',
@@ -154,11 +221,17 @@ function QRCodesModal({
                 }}
               >
                 <p style={{ margin: 0, fontSize: 12, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--fp-text-secondary)', textAlign: 'center' }}>
-                  {CATEGORY_LABELS[catId] ?? catId}
+                  {entry.label}
                 </p>
-                {qrUrls[catId] ? (
+                <p style={{ margin: '0 0 2px', fontSize: 11, fontWeight: 700, color: 'var(--fp-text-muted)', textAlign: 'center' }}>
+                  {CATEGORY_LABELS[entry.catId] ?? entry.catId}
+                </p>
+                <p style={{ margin: 0, fontSize: 11, fontFamily: 'monospace', color: 'var(--fp-text-secondary)', textAlign: 'center' }}>
+                  {entry.shelfUid}
+                </p>
+                {qrUrls[entry.entryKey] ? (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img src={qrUrls[catId]} alt={`QR for ${catId}`} style={{ width: 160, height: 160, borderRadius: 8, imageRendering: 'pixelated' }} />
+                  <img src={qrUrls[entry.entryKey]} alt={`QR for ${entry.label}`} style={{ width: 160, height: 160, borderRadius: 8, imageRendering: 'pixelated' }} />
                 ) : (
                   <div style={{ width: 160, height: 160, background: 'var(--fp-input-bg)', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                     <span style={{ fontSize: 12, color: 'var(--fp-text-muted)' }}>Failed</span>
@@ -166,18 +239,18 @@ function QRCodesModal({
                 )}
                 <button
                   type="button"
-                  onClick={() => downloadQR(catId)}
-                  disabled={!qrUrls[catId]}
+                  onClick={() => downloadQR(entry.entryKey, entry.shelfUid)}
+                  disabled={!qrUrls[entry.entryKey]}
                   style={{
                     width: '100%',
                     padding: '8px',
                     borderRadius: 8,
                     border: 'none',
-                    background: qrUrls[catId] ? 'var(--fp-button-accent)' : 'var(--fp-input-bg)',
-                    color: qrUrls[catId] ? '#fff' : 'var(--fp-text-muted)',
+                    background: qrUrls[entry.entryKey] ? 'var(--fp-button-accent)' : 'var(--fp-input-bg)',
+                    color: qrUrls[entry.entryKey] ? '#fff' : 'var(--fp-text-muted)',
                     fontSize: 12,
                     fontWeight: 700,
-                    cursor: qrUrls[catId] ? 'pointer' : 'not-allowed',
+                    cursor: qrUrls[entry.entryKey] ? 'pointer' : 'not-allowed',
                   }}
                 >
                   Download PNG
@@ -422,6 +495,34 @@ export default function MapEditorPage() {
     } finally { setDeploying(false) }
   }
 
+  // QR Codes — make sure the deployed plan in the DB carries the exact same
+  // shelf_uids that the QR images will encode. The editor mints uids on
+  // hydrate, so pulling its current payload and writing it back guarantees the
+  // QRs and the stored plan agree (and therefore match the inventory page's
+  // QR-vs-deployed-plan validation).
+  async function handleOpenQRCodes() {
+    if (!selectedPlanId) return
+    const currentPayload = editorRef.current?.getPayload()
+    if (!currentPayload) return
+
+    setSaving(true)
+    try {
+      await updateFloorPlanData(dataConnect, {
+        id: selectedPlanId,
+        shelves: currentPayload.sections,
+        walls: currentPayload.walls,
+        markers: currentPayload.markers,
+      })
+      setEditorPayload(currentPayload)
+      setShowQRModal(true)
+    } catch (e) {
+      console.error(e)
+      flash('error')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   // Delete — removes plan from DB and clears editor
   async function handleDelete() {
     if (!selectedPlanId) return
@@ -642,12 +743,12 @@ export default function MapEditorPage() {
           </button>
 
           <button
-            style={{ ...btn('#7c3aed', '#fff', !editorPayload?.sections.length), ...actionTile }}
-            onClick={() => setShowQRModal(true)}
-            disabled={!editorPayload?.sections.length}
-            title="Generate QR codes for shelf zones"
+            style={{ ...btn('#7c3aed', '#fff', !editorPayload?.sections.length || saving), ...actionTile }}
+            onClick={handleOpenQRCodes}
+            disabled={!editorPayload?.sections.length || saving}
+            title="Save the layout and generate QR codes for shelf zones"
           >
-            QR Codes
+            {saving ? 'Saving…' : 'QR Codes'}
           </button>
 
           <a
@@ -699,6 +800,7 @@ export default function MapEditorPage() {
         <QRCodesModal
           sections={editorPayload.sections}
           planId={selectedPlanId}
+          isLivePlan={Boolean(selectedPlanId) && selectedPlanId === livePlanId}
           onClose={() => setShowQRModal(false)}
         />
       )}

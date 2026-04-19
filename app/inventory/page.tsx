@@ -2,10 +2,20 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { BrowserMultiFormatReader } from "@zxing/browser";
+import { BarcodeFormat, DecodeHintType, NotFoundException } from "@zxing/library";
+import { QueryFetchPolicy } from "firebase/data-connect";
 
 import LoadingAnimation from "@/components/LoadingAnimation";
 import HexPanel from "../components/HexPanel";
+import FloorPlanCanvas, {
+  CATEGORIES,
+  type CategoryId,
+  type FloorPlanZone,
+} from "../components/FloorPlanCanvas";
+import { dataConnect } from "../../src/lib/firebase";
+import { getAllFloorPlans } from "../../src/dataconnect-generated";
 
 type AnalyzeResponse = {
   text?: string;
@@ -56,6 +66,17 @@ type InventorySnapshot = {
   notes: string[];
 };
 
+type DetectedCode = {
+  value: string;
+  symbology: "qr" | "upc" | "ean" | "barcode" | "unknown" | string;
+  location: ItemLocation | null;
+};
+
+type CodeScanSnapshot = {
+  codes: DetectedCode[];
+  notes: string[];
+};
+
 type ImageDimensions = {
   width: number;
   height: number;
@@ -76,6 +97,66 @@ type AnalyzeOneResult = {
   rows: Array<Record<string, unknown>>;
   detectedCount: number;
   notes: string[];
+};
+
+type ShelfQrTarget = {
+  shelfTag: string;
+  shelfName: string;
+  shelfUid: string;
+  planId: string | null;
+  category: string | null;
+};
+
+type ShelfSaveBatch = {
+  shelfName: string;
+  shelfTag: string | null;
+  rows: Array<Record<string, unknown>>;
+};
+
+// Shelf as stored on a deployed floor plan (source-of-truth for manual picks).
+type ShelfOption = {
+  shelfUid: string;
+  catId: CategoryId;
+  limit: number;
+  rotation: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+};
+
+type DeployedFloorPlan = {
+  planId: string;
+  shelves: ShelfOption[];
+};
+
+// One entry in the "couldn't find a QR — pick a shelf manually" queue.
+type ManualShelfPick = {
+  imageId: string;
+  fileName: string;
+  previewUrl: string;
+  file: File;
+  chosenShelfUid: string | null;
+  skipped: boolean;
+};
+
+// Held between Phase 1 (QR scan) and Phase 2 (analyze + save) so Phase 2 can
+// resume after the user finishes manually assigning shelves to pending images.
+type PendingUploadState = {
+  imagesSnapshot: SelectedUploadImage[];
+  autoTargets: Record<string, ShelfQrTarget>;
+  notes: string[];
+  failedCount: number;
+  manualPicks: ManualShelfPick[];
+};
+
+const SHELF_CATEGORY_LABELS: Record<string, string> = {
+  frozen: "Frozen",
+  refrigerated: "Refrigerated",
+  produce: "Produce",
+  canned_goods: "Canned Goods",
+  dry_goods: "Dry Goods",
+  misc_non_food: "Misc / Non-Food",
 };
 
 // Canonical output vocabulary — the prompt and all downstream checks share this
@@ -305,6 +386,91 @@ If the shelf contains NO identifiable pantry items, return "inventoryItems": [] 
 `.trim();
 }
 
+function buildShelfQrLocatePrompt(imageWidth: number, imageHeight: number) {
+  return `
+You are LOCATING a QR code in a pantry shelf photo. You do NOT need to decode it.
+
+Return ONLY valid JSON. No markdown. No code fences.
+
+Schema:
+{
+  "found": true,
+  "centerX": 0,
+  "centerY": 0,
+  "radius": 0,
+  "imageWidth": ${imageWidth},
+  "imageHeight": ${imageHeight},
+  "notes": "short string"
+}
+
+What a QR looks like:
+- A square of black-and-white modules with three large square "finder" patterns in three of its corners.
+- In this app the QR is printed on a shelf label — a small white/light rectangular tag, usually near a shelf edge or under a product. It may be only 3-10% of the image.
+
+Rules:
+- centerX/centerY/radius MUST be in source-image pixel coordinates. centerX in [0, ${imageWidth}], centerY in [0, ${imageHeight}].
+- radius should be HALF the QR's side length (so the QR square fits inside a box of 2*radius × 2*radius around the center). It's OK to slightly over-estimate; do NOT under-estimate.
+- If more than one QR is visible, return the largest / most complete one.
+- If no QR is visible, return {"found": false, "centerX": 0, "centerY": 0, "radius": 0, "imageWidth": ${imageWidth}, "imageHeight": ${imageHeight}, "notes": "..."}.
+- Never invent a location.
+`.trim();
+}
+
+type QrLocateResult = {
+  found: boolean;
+  location: ItemLocation | null;
+};
+
+function parseShelfQrLocateJson(
+  raw: string,
+  realDimensions: ImageDimensions
+): QrLocateResult {
+  const parsed = parseJsonObject(raw);
+  if (!parsed) return { found: false, location: null };
+  if (parsed.found === false) return { found: false, location: null };
+
+  const location = parseLocation(parsed);
+  if (!location) return { found: false, location: null };
+  return {
+    found: true,
+    location: normalizeLocationToRealDimensions(location, realDimensions),
+  };
+}
+
+function parseJsonObject(raw: string): Record<string, unknown> | null {
+  const sanitized = raw
+    .trim()
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/```$/, "")
+    .trim();
+
+  try {
+    const parsed = JSON.parse(sanitized);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    // fall through to object-fragment parse
+  }
+
+  const fragmentMatch = sanitized.match(/\{[\s\S]*\}/);
+  if (!fragmentMatch) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(fragmentMatch[0]);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
 function ensurePackageDetails(value: unknown) {
   const text = String(value ?? "").trim();
   if (text) {
@@ -474,6 +640,134 @@ function toBase64Data(file: File): Promise<string> {
   });
 }
 
+const MAX_UPLOAD_BYTES = 1024 * 1024; // 1 MB
+
+// Re-encode an in-memory image as JPEG at the given long-edge cap and quality.
+// Returns null if the canvas could not produce a Blob.
+function renderImageToJpegBlob(
+  image: HTMLImageElement,
+  maxDim: number,
+  quality: number
+): Promise<Blob | null> {
+  const natW = Math.max(1, image.naturalWidth || image.width);
+  const natH = Math.max(1, image.naturalHeight || image.height);
+  const longEdge = Math.max(natW, natH);
+  const scale = longEdge > maxDim ? maxDim / longEdge : 1;
+  const outW = Math.max(1, Math.round(natW * scale));
+  const outH = Math.max(1, Math.round(natH * scale));
+
+  const canvas = document.createElement("canvas");
+  canvas.width = outW;
+  canvas.height = outH;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return Promise.resolve(null);
+  ctx.imageSmoothingEnabled = scale < 1;
+  ctx.drawImage(image, 0, 0, natW, natH, 0, 0, outW, outH);
+
+  return new Promise<Blob | null>((resolve) => {
+    canvas.toBlob((blob) => resolve(blob), "image/jpeg", quality);
+  });
+}
+
+// Compress a user-supplied image File so it fits under MAX_UPLOAD_BYTES. The
+// returned File replaces the original everywhere downstream (Cloudinary
+// upload, local barcode decode, AI analyzer pre-encode, preview thumbnails),
+// so all consumers keep working without further changes. Files already under
+// the limit are returned unchanged to preserve original quality.
+async function compressImageFileUnderLimit(
+  file: File,
+  limitBytes = MAX_UPLOAD_BYTES
+): Promise<File> {
+  if (file.size <= limitBytes) {
+    return file;
+  }
+
+  let loaded: { image: HTMLImageElement; dispose: () => void };
+  try {
+    loaded = await loadImageFromFile(file);
+  } catch {
+    return file;
+  }
+
+  try {
+    // Walk progressively more aggressive (smaller, lower-quality) re-encodings
+    // until one fits under the limit. The last attempt is the smallest we are
+    // willing to ship; we accept it even if it's still slightly over rather
+    // than rejecting the upload.
+    const attempts: Array<{ maxDim: number; quality: number }> = [
+      { maxDim: 2560, quality: 0.85 },
+      { maxDim: 2048, quality: 0.82 },
+      { maxDim: 1920, quality: 0.78 },
+      { maxDim: 1600, quality: 0.74 },
+      { maxDim: 1280, quality: 0.7 },
+      { maxDim: 1024, quality: 0.65 },
+      { maxDim: 800, quality: 0.6 },
+    ];
+
+    let lastBlob: Blob | null = null;
+    for (const attempt of attempts) {
+      const blob = await renderImageToJpegBlob(
+        loaded.image,
+        attempt.maxDim,
+        attempt.quality
+      );
+      if (!blob) continue;
+      lastBlob = blob;
+      if (blob.size <= limitBytes) break;
+    }
+
+    if (!lastBlob) {
+      return file;
+    }
+
+    const baseName = file.name.replace(/\.[^./\\]+$/, "") || "upload";
+    return new File([lastBlob], `${baseName}.jpg`, {
+      type: "image/jpeg",
+      lastModified: file.lastModified,
+    });
+  } finally {
+    loaded.dispose();
+  }
+}
+
+// Produce a downscaled JPEG for the LLM analyzer. Full-res images blow past
+// Next.js route-handler body limits and upstream model size caps (an 8 MB PNG
+// becomes ~11 MB of JSON after base64). 2048 px on the long edge is plenty for
+// vision models and keeps the payload well under any practical limit. The
+// original File is still used for Cloudinary upload and local barcode decoding.
+async function encodeImageForAi(
+  file: File,
+  maxDim = 2048,
+  quality = 0.85
+): Promise<{ base64: string; mimeType: string; width: number; height: number }> {
+  const { image, dispose } = await loadImageFromFile(file);
+  try {
+    const natW = Math.max(1, image.naturalWidth || image.width);
+    const natH = Math.max(1, image.naturalHeight || image.height);
+    const longEdge = Math.max(natW, natH);
+    const scale = longEdge > maxDim ? maxDim / longEdge : 1;
+    const outW = Math.max(1, Math.round(natW * scale));
+    const outH = Math.max(1, Math.round(natH * scale));
+
+    const canvas = document.createElement("canvas");
+    canvas.width = outW;
+    canvas.height = outH;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("Canvas 2D context unavailable.");
+    ctx.imageSmoothingEnabled = scale < 1;
+    ctx.drawImage(image, 0, 0, natW, natH, 0, 0, outW, outH);
+
+    const dataUrl = canvas.toDataURL("image/jpeg", quality);
+    const base64 = dataUrl.split(",")[1] || "";
+    if (!base64) {
+      throw new Error("Could not encode image as JPEG.");
+    }
+    return { base64, mimeType: "image/jpeg", width: outW, height: outH };
+  } finally {
+    dispose();
+  }
+}
+
 function readImageDimensions(file: File): Promise<ImageDimensions> {
   return new Promise((resolve, reject) => {
     const image = new window.Image();
@@ -547,6 +841,448 @@ async function uploadPhotoToCloudinary(
 
 function createUploadImageId(file: File, index: number) {
   return `${file.name}-${file.lastModified}-${index}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function buildShelfTag(planId: string | null, shelfUid: string) {
+  const normalizedPlanId = (planId || "unknown-plan").trim().slice(0, 64) || "unknown-plan";
+  const normalizedShelfUid = shelfUid.trim().slice(0, 64);
+  return `floorplan:${normalizedPlanId}:shelf:${normalizedShelfUid}`.slice(0, 160);
+}
+
+function buildShelfNameFromQr(category: string | null, shelfUid: string) {
+  const categoryLabel = category ? SHELF_CATEGORY_LABELS[category] || category : "Shelf";
+  const shortUid = shelfUid.slice(0, 8);
+  return `${categoryLabel} Shelf ${shortUid}`;
+}
+
+function parseShelfQrPayload(rawPayload: string): ShelfQrTarget | null {
+  let parsed: Record<string, unknown>;
+
+  try {
+    parsed = JSON.parse(rawPayload) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+
+  const kind = typeof parsed.kind === "string" ? parsed.kind.trim().toLowerCase() : "";
+  if (kind && kind !== "hub-shelf") {
+    return null;
+  }
+
+  const rawShelfUid =
+    (typeof parsed.shelfUid === "string" ? parsed.shelfUid : null) ||
+    (typeof parsed.shelf_uid === "string" ? parsed.shelf_uid : null) ||
+    "";
+  const shelfUid = rawShelfUid.trim().slice(0, 64);
+
+  if (!shelfUid) {
+    return null;
+  }
+
+  const rawPlanId = typeof parsed.planId === "string" ? parsed.planId.trim() : "";
+  const planId = rawPlanId && rawPlanId !== "unknown" ? rawPlanId.slice(0, 64) : null;
+  const category =
+    typeof parsed.category === "string" && parsed.category.trim()
+      ? parsed.category.trim().slice(0, 64)
+      : null;
+
+  return {
+    shelfTag: buildShelfTag(planId, shelfUid),
+    shelfName: buildShelfNameFromQr(category, shelfUid),
+    shelfUid,
+    planId,
+    category,
+  };
+}
+
+type ScannedCode = {
+  value: string;
+  symbology: "qr" | "upc" | "ean" | "barcode" | "unknown";
+  centerX: number;
+  centerY: number;
+  radius: number;
+  sourceWidth: number;
+  sourceHeight: number;
+};
+
+const SHELF_QR_FORMATS = ["qr_code"] as const;
+const PRODUCT_CODE_FORMATS = [
+  "qr_code",
+  "upc_a",
+  "upc_e",
+  "ean_13",
+  "ean_8",
+  "code_128",
+] as const;
+
+const ZXING_FORMAT_MAP: Record<string, BarcodeFormat> = {
+  qr_code: BarcodeFormat.QR_CODE,
+  upc_a: BarcodeFormat.UPC_A,
+  upc_e: BarcodeFormat.UPC_E,
+  ean_13: BarcodeFormat.EAN_13,
+  ean_8: BarcodeFormat.EAN_8,
+  code_128: BarcodeFormat.CODE_128,
+};
+
+function normalizeSymbology(raw: string): ScannedCode["symbology"] {
+  const lowered = (raw || "").toLowerCase();
+  if (lowered.includes("qr")) return "qr";
+  if (lowered.startsWith("upc")) return "upc";
+  if (lowered.startsWith("ean")) return "ean";
+  if (lowered.includes("code_128") || lowered.includes("code-128") || lowered.includes("code128")) {
+    return "barcode";
+  }
+  return "unknown";
+}
+
+function centerAndRadiusFromBox(bb: {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}): { cx: number; cy: number; r: number } {
+  return {
+    cx: bb.x + bb.width / 2,
+    cy: bb.y + bb.height / 2,
+    r: Math.max(1, Math.max(bb.width, bb.height) / 2),
+  };
+}
+
+function centerAndRadiusFromResultPoints(
+  points: Array<{ x: number; y: number }>
+): { cx: number; cy: number; r: number } {
+  if (!points.length) return { cx: 0, cy: 0, r: 0 };
+  const cx = points.reduce((sum, p) => sum + p.x, 0) / points.length;
+  const cy = points.reduce((sum, p) => sum + p.y, 0) / points.length;
+  const r = Math.max(
+    1,
+    ...points.map((p) => Math.hypot(p.x - cx, p.y - cy))
+  );
+  return { cx, cy, r };
+}
+
+async function loadImageFromFile(
+  file: File
+): Promise<{ image: HTMLImageElement; dispose: () => void }> {
+  const url = URL.createObjectURL(file);
+  try {
+    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const img = new window.Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error("Could not load image."));
+      img.src = url;
+    });
+    return { image, dispose: () => URL.revokeObjectURL(url) };
+  } catch (err) {
+    URL.revokeObjectURL(url);
+    throw err;
+  }
+}
+
+function imageToCanvas(image: HTMLImageElement): HTMLCanvasElement {
+  const w = Math.max(1, image.naturalWidth || image.width);
+  const h = Math.max(1, image.naturalHeight || image.height);
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Canvas 2D context unavailable.");
+  ctx.drawImage(image, 0, 0, w, h);
+  return canvas;
+}
+
+function cropImageToCanvas(
+  image: HTMLImageElement,
+  rect: { x: number; y: number; width: number; height: number },
+  outputMaxDim: number
+): HTMLCanvasElement {
+  const natW = Math.max(1, image.naturalWidth || image.width);
+  const natH = Math.max(1, image.naturalHeight || image.height);
+  const x = Math.max(0, Math.min(natW - 1, Math.round(rect.x)));
+  const y = Math.max(0, Math.min(natH - 1, Math.round(rect.y)));
+  const w = Math.max(1, Math.min(Math.round(rect.width), natW - x));
+  const h = Math.max(1, Math.min(Math.round(rect.height), natH - y));
+  const scale = outputMaxDim > 0 ? outputMaxDim / Math.max(w, h) : 1;
+  const outW = Math.max(1, Math.round(w * scale));
+  const outH = Math.max(1, Math.round(h * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = outW;
+  canvas.height = outH;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Canvas 2D context unavailable.");
+  ctx.imageSmoothingEnabled = scale < 1;
+  ctx.drawImage(image, x, y, w, h, 0, 0, outW, outH);
+  return canvas;
+}
+
+type BarcodeDetectorCtor = new (init: { formats: string[] }) => {
+  detect: (source: CanvasImageSource) => Promise<
+    Array<{
+      rawValue?: string;
+      format?: string;
+      boundingBox?: { x: number; y: number; width: number; height: number };
+    }>
+  >;
+};
+
+type BarcodeDetectorStatic = BarcodeDetectorCtor & {
+  getSupportedFormats?: () => Promise<string[]>;
+};
+
+async function scanWithBarcodeDetector(
+  source: HTMLImageElement | HTMLCanvasElement,
+  formats: readonly string[],
+  sourceWidth: number,
+  sourceHeight: number
+): Promise<ScannedCode[] | null> {
+  if (typeof window === "undefined") return null;
+  const Detector = (window as unknown as { BarcodeDetector?: BarcodeDetectorStatic })
+    .BarcodeDetector;
+  if (!Detector) return null;
+
+  try {
+    let usable = [...formats] as string[];
+    if (typeof Detector.getSupportedFormats === "function") {
+      const supported = await Detector.getSupportedFormats();
+      if (Array.isArray(supported) && supported.length > 0) {
+        usable = usable.filter((f) => supported.includes(f));
+      }
+    }
+    if (!usable.length) return null;
+
+    const detector = new Detector({ formats: usable });
+    const results = await detector.detect(source);
+    return results
+      .map((r) => {
+        const value = String(r.rawValue ?? "").trim();
+        if (!value) return null;
+        const bb = r.boundingBox ?? { x: 0, y: 0, width: 0, height: 0 };
+        const { cx, cy, r: radius } = centerAndRadiusFromBox(bb);
+        return {
+          value,
+          symbology: normalizeSymbology(String(r.format ?? "unknown")),
+          centerX: cx,
+          centerY: cy,
+          radius,
+          sourceWidth,
+          sourceHeight,
+        } satisfies ScannedCode;
+      })
+      .filter((code): code is ScannedCode => Boolean(code));
+  } catch {
+    return null;
+  }
+}
+
+type ZxingResultPoint = { getX: () => number; getY: () => number };
+
+function scanWithZxing(
+  canvas: HTMLCanvasElement,
+  formats: readonly string[]
+): ScannedCode[] {
+  const mapped = formats
+    .map((f) => ZXING_FORMAT_MAP[f])
+    .filter((v): v is BarcodeFormat => typeof v === "number");
+  if (!mapped.length) return [];
+
+  const hints = new Map<DecodeHintType, unknown>();
+  hints.set(DecodeHintType.POSSIBLE_FORMATS, mapped);
+  hints.set(DecodeHintType.TRY_HARDER, true);
+  const reader = new BrowserMultiFormatReader(hints);
+
+  try {
+    const result = reader.decodeFromCanvas(canvas);
+    if (!result) return [];
+    const points = (result.getResultPoints?.() ?? []) as ZxingResultPoint[];
+    const mappedPoints = points.map((p) => ({
+      x: typeof p.getX === "function" ? p.getX() : 0,
+      y: typeof p.getY === "function" ? p.getY() : 0,
+    }));
+    const { cx, cy, r } = centerAndRadiusFromResultPoints(mappedPoints);
+    return [
+      {
+        value: result.getText(),
+        symbology: normalizeSymbology(
+          BarcodeFormat[result.getBarcodeFormat()] ?? "unknown"
+        ),
+        centerX: cx,
+        centerY: cy,
+        radius: r || Math.max(canvas.width, canvas.height) * 0.1,
+        sourceWidth: canvas.width,
+        sourceHeight: canvas.height,
+      },
+    ];
+  } catch (error) {
+    if (error instanceof NotFoundException) return [];
+    return [];
+  }
+}
+
+async function scanCodesOnCanvas(
+  canvas: HTMLCanvasElement,
+  formats: readonly string[]
+): Promise<ScannedCode[]> {
+  const native = await scanWithBarcodeDetector(
+    canvas,
+    formats,
+    canvas.width,
+    canvas.height
+  );
+  if (native && native.length) return native;
+  return scanWithZxing(canvas, formats);
+}
+
+async function scanCodesInImage(
+  image: HTMLImageElement,
+  formats: readonly string[]
+): Promise<ScannedCode[]> {
+  const w = Math.max(1, image.naturalWidth || image.width);
+  const h = Math.max(1, image.naturalHeight || image.height);
+  const native = await scanWithBarcodeDetector(image, formats, w, h);
+  if (native && native.length) return native;
+  const canvas = imageToCanvas(image);
+  return scanWithZxing(canvas, formats);
+}
+
+async function locateShelfQrViaAi(
+  imageBase64: string,
+  mimeType: string,
+  dimensions: ImageDimensions
+): Promise<QrLocateResult> {
+  const response = await fetch("/api/analyze", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      prompt: buildShelfQrLocatePrompt(dimensions.width, dimensions.height),
+      imageBase64,
+      mimeType,
+      responseMimeType: "application/json",
+    }),
+  });
+
+  const { json, text } = await readApiPayload(response);
+  const payload = (json || {}) as AnalyzeResponse;
+
+  if (!response.ok) {
+    const detail = text.trim().startsWith("<!DOCTYPE")
+      ? "Received HTML instead of JSON from locator."
+      : text.slice(0, 160);
+    throw new Error(
+      payload.error || `AI QR locate failed (${response.status}). ${detail}`
+    );
+  }
+
+  return parseShelfQrLocateJson(payload.text || "", dimensions);
+}
+
+function resolveShelfQrFromValue(value: string): ShelfQrTarget | null {
+  return parseShelfQrPayload(value);
+}
+
+function firstShelfHit(codes: ScannedCode[]): ShelfQrTarget | null {
+  for (const code of codes) {
+    const parsed = resolveShelfQrFromValue(code.value);
+    if (parsed) return parsed;
+  }
+  return null;
+}
+
+// Shelf-QR detection pipeline: real decoder primary, LLM used only as a locator.
+//   Pass 1: BarcodeDetector (native) / ZXing fallback on the full image.
+//   Pass 2: If no hit, ask the model to LOCATE the QR (no decode), crop tightly
+//           client-side, and re-run the real decoder on the high-res crop.
+//   Pass 3: Brute-force 3×3 overlapping tile sweep, still using the real decoder.
+// The model never returns a payload — so there is no way for it to fabricate a
+// shelf identifier.
+async function detectShelfQrTarget(file: File): Promise<ShelfQrTarget | null> {
+  const { image, dispose } = await loadImageFromFile(file);
+  try {
+    // Pass 1: full-image decode.
+    const direct = await scanCodesInImage(image, SHELF_QR_FORMATS);
+    const directHit = firstShelfHit(direct);
+    if (directHit) return directHit;
+
+    const dimensions: ImageDimensions = {
+      width: Math.max(1, image.naturalWidth || image.width),
+      height: Math.max(1, image.naturalHeight || image.height),
+    };
+
+    // Pass 2: AI locator -> tight crop -> real decoder.
+    try {
+      // Send the model a downscaled JPEG so the request body fits and the
+      // upload is fast. The model returns coordinates in the downscaled space,
+      // and we scale them back up to crop the full-resolution image.
+      const aiEncoded = await encodeImageForAi(file, 2048, 0.85);
+      const aiDimensions: ImageDimensions = {
+        width: aiEncoded.width,
+        height: aiEncoded.height,
+      };
+      const locate = await locateShelfQrViaAi(
+        aiEncoded.base64,
+        aiEncoded.mimeType,
+        aiDimensions
+      );
+      if (locate.found && locate.location) {
+        const scaleX = dimensions.width / aiDimensions.width;
+        const scaleY = dimensions.height / aiDimensions.height;
+        const loc = {
+          centerX: locate.location.centerX * scaleX,
+          centerY: locate.location.centerY * scaleY,
+          radius: locate.location.radius * Math.max(scaleX, scaleY),
+        };
+        const paddedRadius = Math.max(
+          loc.radius * 1.6,
+          Math.min(dimensions.width, dimensions.height) * 0.04
+        );
+        const side = Math.min(
+          Math.min(dimensions.width, dimensions.height),
+          paddedRadius * 2
+        );
+        const cropCanvas = cropImageToCanvas(
+          image,
+          {
+            x: loc.centerX - side / 2,
+            y: loc.centerY - side / 2,
+            width: side,
+            height: side,
+          },
+          1280
+        );
+        const cropCodes = await scanCodesOnCanvas(cropCanvas, SHELF_QR_FORMATS);
+        const cropHit = firstShelfHit(cropCodes);
+        if (cropHit) return cropHit;
+      }
+    } catch {
+      // Ignore locator failures and fall through to tile sweep.
+    }
+
+    // Pass 3: overlapping 3×3 tile sweep with the real decoder — no AI calls.
+    const tileW = Math.max(256, Math.round(dimensions.width * 0.5));
+    const tileH = Math.max(256, Math.round(dimensions.height * 0.5));
+    const steps = [0, 0.5, 1] as const;
+    for (const sy of steps) {
+      const y = Math.round((dimensions.height - tileH) * sy);
+      for (const sx of steps) {
+        const x = Math.round((dimensions.width - tileW) * sx);
+        try {
+          const tileCanvas = cropImageToCanvas(
+            image,
+            { x, y, width: tileW, height: tileH },
+            1280
+          );
+          const tileCodes = await scanCodesOnCanvas(tileCanvas, SHELF_QR_FORMATS);
+          const tileHit = firstShelfHit(tileCodes);
+          if (tileHit) return tileHit;
+        } catch {
+          // Try next tile.
+        }
+      }
+    }
+
+    return null;
+  } finally {
+    dispose();
+  }
 }
 
 // Detection is "suspect" — and therefore sent through a tighter-crop refinement
@@ -634,8 +1370,18 @@ function mergeRowGroup(rows: SaveRow[]): SaveRow {
     ""
   );
 
+  // Preserve any decoded SKU across the cluster — primary might lack one even
+  // when a sibling carries a real UPC/EAN from the code-scan pass.
+  const firstNonEmptySku = rows
+    .map((row) => {
+      const value = row.sku;
+      return typeof value === "string" ? value.trim() : "";
+    })
+    .find((value) => value.length > 0);
+
   return {
     ...primary,
+    sku: firstNonEmptySku || primary.sku || null,
     quantity: Math.max(1, Math.round(totalQuantity)),
     description: longestDescription || primary.description,
     photoUrl: biggestPhoto.photoUrl ?? primary.photoUrl,
@@ -1019,20 +1765,142 @@ function mergeRefinedItem(
   };
 }
 
+function distanceSquared(a: { x: number; y: number }, b: { x: number; y: number }) {
+  const dx = a.x - b.x;
+  const dy = a.y - b.y;
+  return dx * dx + dy * dy;
+}
+
+function assignCodesToItems(input: {
+  items: RawInventoryItem[];
+  codes: DetectedCode[];
+  realDimensions: ImageDimensions;
+}): { items: RawInventoryItem[]; assignedCount: number } {
+  const availableCodes = input.codes
+    .map((code) => ({
+      ...code,
+      location: code.location
+        ? normalizeLocationToRealDimensions(code.location, input.realDimensions)
+        : null,
+    }))
+    .filter((code) => Boolean(code.value) && Boolean(code.location));
+
+  if (!availableCodes.length) {
+    return { items: input.items, assignedCount: 0 };
+  }
+
+  const items = input.items.map((item) => ({
+    ...item,
+    location: item.location
+      ? normalizeLocationToRealDimensions(item.location, input.realDimensions)
+      : null,
+  }));
+
+  // Greedy assignment: for each item (closest-first), attach the nearest unused code
+  // if it lands within a reasonable neighborhood around the item's detection circle.
+  const candidates: Array<{
+    itemIndex: number;
+    codeIndex: number;
+    d2: number;
+    threshold2: number;
+  }> = [];
+
+  for (let i = 0; i < items.length; i += 1) {
+    const item = items[i];
+    if (item.sku && String(item.sku).trim()) continue;
+    if (!item.location) continue;
+
+    const itemCenter = { x: item.location.centerX, y: item.location.centerY };
+    const itemRadius = Math.max(24, item.location.radius || 0);
+
+    for (let j = 0; j < availableCodes.length; j += 1) {
+      const code = availableCodes[j];
+      if (!code.location) continue;
+      const codeCenter = { x: code.location.centerX, y: code.location.centerY };
+      const codeRadius = Math.max(12, code.location.radius || 0);
+      const d2 = distanceSquared(itemCenter, codeCenter);
+      const threshold = Math.max(itemRadius * 1.25, itemRadius + codeRadius + 18);
+      candidates.push({ itemIndex: i, codeIndex: j, d2, threshold2: threshold * threshold });
+    }
+  }
+
+  candidates.sort((a, b) => a.d2 - b.d2);
+
+  const usedCodes = new Set<number>();
+  let assignedCount = 0;
+  const next = [...items];
+
+  for (const candidate of candidates) {
+    if (usedCodes.has(candidate.codeIndex)) continue;
+    if (candidate.d2 > candidate.threshold2) continue;
+    const item = next[candidate.itemIndex];
+    if (!item || (item.sku && String(item.sku).trim())) continue;
+    const code = availableCodes[candidate.codeIndex];
+    next[candidate.itemIndex] = { ...item, sku: code.value };
+    usedCodes.add(candidate.codeIndex);
+    assignedCount += 1;
+  }
+
+  return { items: next, assignedCount };
+}
+
 async function analyzeOneImage(file: File, shelfName: string): Promise<AnalyzeOneResult> {
   const dimensions = await readImageDimensions(file);
-  const imageBase64 = await toBase64Data(file);
+  // Full-resolution base64 is still uploaded to Cloudinary so the student page
+  // and zoom modal get the highest-quality shelf photo we have.
+  const fullResBase64Promise = toBase64Data(file);
+  // AI vision calls get a compressed 2048-px JPEG to stay well under request
+  // body and upstream API limits. 8+ MB PNGs would otherwise fail at the edge.
+  const aiEncoded = await encodeImageForAi(file, 2048, 0.85);
+  const codeScanNotesPrefix = "Code scan:";
 
-  const analyzeResponse = await fetch("/api/analyze", {
+  // Local machine-readable code scan (QR + UPC/EAN/Code128) via BarcodeDetector
+  // with a ZXing fallback. Runs in parallel with the LLM's product-detail call.
+  // The decoder never hallucinates, so any code in the returned snapshot is a
+  // real decode from the printed barcode.
+  const codeScanPromise: Promise<CodeScanSnapshot> = (async () => {
+    try {
+      const { image, dispose } = await loadImageFromFile(file);
+      try {
+        const scanned = await scanCodesInImage(image, PRODUCT_CODE_FORMATS);
+        return {
+          codes: scanned.map((code) => ({
+            value: code.value,
+            symbology: code.symbology,
+            location: {
+              centerX: code.centerX,
+              centerY: code.centerY,
+              radius: Math.max(1, code.radius),
+              imageWidth: code.sourceWidth,
+              imageHeight: code.sourceHeight,
+            },
+          })),
+          notes: [],
+        };
+      } finally {
+        dispose();
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "unknown error";
+      return { codes: [], notes: [`Local decode failed: ${message}`] };
+    }
+  })();
+
+  const analyzePromise = fetch("/api/analyze", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       prompt: buildInventoryPrompt(dimensions.width, dimensions.height),
-      imageBase64,
-      mimeType: file.type || "image/jpeg",
+      imageBase64: aiEncoded.base64,
+      mimeType: aiEncoded.mimeType,
       responseMimeType: "application/json",
     }),
   });
+
+  const [codeSnapshot, analyzeResponse] = await Promise.all([
+    codeScanPromise,
+    analyzePromise,
+  ]);
 
   const { json, text } = await readApiPayload(analyzeResponse);
   const payload = (json || {}) as AnalyzeResponse;
@@ -1047,7 +1915,11 @@ async function analyzeOneImage(file: File, shelfName: string): Promise<AnalyzeOn
   const snapshot = parseInventoryJson(payload.text || "");
 
   if (!snapshot.inventoryItems.length) {
-    return { rows: [], detectedCount: 0, notes: snapshot.notes };
+    return {
+      rows: [],
+      detectedCount: 0,
+      notes: [...snapshot.notes, ...codeSnapshot.notes.map((note) => `${codeScanNotesPrefix} ${note}`)],
+    };
   }
 
   const refinedItems: RawInventoryItem[] = [];
@@ -1083,15 +1955,23 @@ async function analyzeOneImage(file: File, shelfName: string): Promise<AnalyzeOn
     }
   }
 
+  // Merge codes into item skus by nearest location match.
+  const { items: itemsWithCodes, assignedCount: codeAssignedCount } = assignCodesToItems({
+    items: refinedItems,
+    codes: codeSnapshot.codes,
+    realDimensions: dimensions,
+  });
+
+  const fullResBase64 = await fullResBase64Promise;
   const shelfPhotoUrl = await uploadPhotoToCloudinary(
-    imageBase64,
+    fullResBase64,
     file.type || "image/jpeg",
     shelfName
   );
 
-  const sanitizedItems = refinedItems.map(normalizeBareName);
+  const sanitizedItems = itemsWithCodes.map(normalizeBareName);
   const bareNameRewriteCount = sanitizedItems.reduce(
-    (count, item, index) => count + (item === refinedItems[index] ? 0 : 1),
+    (count, item, index) => count + (item === itemsWithCodes[index] ? 0 : 1),
     0
   );
 
@@ -1154,11 +2034,17 @@ async function analyzeOneImage(file: File, shelfName: string): Promise<AnalyzeOn
       `Rewrote ${bareNameRewriteCount} placeholder name${bareNameRewriteCount === 1 ? "" : "s"} (e.g. bare category word or "Unknown") to a canonical "Unknown <type>" fallback.`
     );
   }
+  if (codeSnapshot.codes.length > 0) {
+    combinedNotes.push(
+      `Decoded ${codeSnapshot.codes.length} machine-readable code${codeSnapshot.codes.length === 1 ? "" : "s"} and assigned ${codeAssignedCount} to nearby item${codeAssignedCount === 1 ? "" : "s"} as SKU.`
+    );
+  }
   if (estimatedQuantityCount > 0) {
     combinedNotes.push(
       `Estimated ${extraUnitsBehindFront} extra unit${extraUnitsBehindFront === 1 ? "" : "s"} stacked behind the front row across ${estimatedQuantityCount} product${estimatedQuantityCount === 1 ? "" : "s"}.`
     );
   }
+  combinedNotes.push(...codeSnapshot.notes.map((note) => `${codeScanNotesPrefix} ${note}`));
   combinedNotes.push(...refinementNotes);
 
   return {
@@ -1168,15 +2054,447 @@ async function analyzeOneImage(file: File, shelfName: string): Promise<AnalyzeOn
   };
 }
 
+// Build the same ShelfQrTarget shape a decoded QR would produce, so a manually
+// picked shelf travels through the rest of the pipeline (analyzeOneImage,
+// shelfBatches, save) without special-casing.
+function shelfOptionToQrTarget(
+  shelf: ShelfOption,
+  planId: string
+): ShelfQrTarget {
+  return {
+    shelfTag: buildShelfTag(planId, shelf.shelfUid),
+    shelfName: buildShelfNameFromQr(shelf.catId, shelf.shelfUid),
+    shelfUid: shelf.shelfUid,
+    planId,
+    category: shelf.catId,
+  };
+}
+
+// Data Connect row shape for the shelves array on a floor plan.
+type RawShelfRow = {
+  shelf_uid?: unknown;
+  cat_id?: unknown;
+  limit_per_student?: unknown;
+  rotation?: unknown;
+  map_x?: unknown;
+  map_y?: unknown;
+  map_w?: unknown;
+  map_h?: unknown;
+};
+
+function toShelfOption(row: RawShelfRow, index: number): ShelfOption | null {
+  const uid = typeof row.shelf_uid === "string" ? row.shelf_uid.trim() : "";
+  if (!uid) return null;
+  const catIdRaw = typeof row.cat_id === "string" ? row.cat_id.trim() : "";
+  const catId = (CATEGORIES.find((c) => c.id === catIdRaw)?.id ??
+    "misc_non_food") as CategoryId;
+  const num = (value: unknown, fallback: number) =>
+    typeof value === "number" && Number.isFinite(value) ? value : fallback;
+  void index;
+  return {
+    shelfUid: uid.slice(0, 64),
+    catId,
+    limit: num(row.limit_per_student, 0),
+    rotation: num(row.rotation, 0),
+    x: num(row.map_x, 0),
+    y: num(row.map_y, 0),
+    w: num(row.map_w, 0),
+    h: num(row.map_h, 0),
+  };
+}
+
+async function loadDeployedFloorPlan(): Promise<DeployedFloorPlan | null> {
+  const res = await getAllFloorPlans(dataConnect, {
+    fetchPolicy: QueryFetchPolicy.SERVER_ONLY,
+  });
+  const plans = (res.data.floorPlans as Array<{
+    id: string;
+    isDeployed?: boolean | null;
+    updatedAt?: string | null;
+    shelves?: unknown | null;
+  }>).filter((plan) => plan.isDeployed);
+  if (!plans.length) return null;
+  plans.sort((a, b) => {
+    const at = a.updatedAt ? new Date(a.updatedAt).getTime() : 0;
+    const bt = b.updatedAt ? new Date(b.updatedAt).getTime() : 0;
+    return bt - at;
+  });
+  const plan = plans[0];
+  const rawShelves = Array.isArray(plan.shelves)
+    ? (plan.shelves as RawShelfRow[])
+    : [];
+  const shelves = rawShelves
+    .map((row, index) => toShelfOption(row, index))
+    .filter((shelf): shelf is ShelfOption => shelf !== null);
+  return { planId: plan.id, shelves };
+}
+
+// Sub-component: lets the admin click a shelf on the deployed floor plan for
+// each image that couldn't be auto-matched via QR decode. Each click binds the
+// selected shelf to the currently active image and advances the queue.
+function ManualShelfPicker({
+  pendingUpload,
+  deployedPlan,
+  activePickIndex,
+  onActivePickIndexChange,
+  onUpdatePick,
+  onToggleSkip,
+  onCancel,
+  onContinue,
+}: {
+  pendingUpload: PendingUploadState;
+  deployedPlan: DeployedFloorPlan;
+  activePickIndex: number;
+  onActivePickIndexChange: (index: number) => void;
+  onUpdatePick: (imageId: string, shelfUid: string | null) => void;
+  onToggleSkip: (imageId: string) => void;
+  onCancel: () => void;
+  onContinue: () => void;
+}) {
+  const picks = pendingUpload.manualPicks;
+  const safeIndex = Math.min(Math.max(0, activePickIndex), Math.max(0, picks.length - 1));
+  const active = picks[safeIndex];
+
+  const canvasSize = 520;
+  const scale = canvasSize; // map_* values are normalized [0, 1].
+
+  const renderedZones: FloorPlanZone[] = useMemo(
+    () =>
+      deployedPlan.shelves.map((shelf) => ({
+        id: shelf.shelfUid,
+        catId: shelf.catId,
+        limit: shelf.limit,
+        rotation: shelf.rotation,
+        x: shelf.x * scale,
+        y: shelf.y * scale,
+        w: shelf.w * scale,
+        h: shelf.h * scale,
+      })),
+    [deployedPlan, scale]
+  );
+
+  const assignmentsByShelfUid = useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const pick of picks) {
+      if (pick.chosenShelfUid) {
+        const list = map.get(pick.chosenShelfUid) ?? [];
+        list.push(pick.fileName);
+        map.set(pick.chosenShelfUid, list);
+      }
+    }
+    return map;
+  }, [picks]);
+
+  const allResolved = picks.every(
+    (pick) => pick.skipped || Boolean(pick.chosenShelfUid)
+  );
+
+  const handleZoneClick = (zone: FloorPlanZone) => {
+    if (!active) return;
+    // Clicking the same shelf again deselects it for this image.
+    const next = active.chosenShelfUid === zone.id ? null : zone.id;
+    onUpdatePick(active.imageId, next);
+    // Advance to the next unresolved image if the admin just assigned one.
+    if (next) {
+      const nextIndex = picks.findIndex(
+        (pick, i) =>
+          i !== safeIndex && !pick.skipped && !pick.chosenShelfUid
+      );
+      if (nextIndex >= 0) {
+        onActivePickIndexChange(nextIndex);
+      }
+    }
+  };
+
+  const buttonBase: React.CSSProperties = {
+    borderRadius: 8,
+    fontSize: 13,
+    fontWeight: 600,
+    padding: "7px 14px",
+    cursor: "pointer",
+    border: "1px solid var(--fp-panel-border)",
+    background: "var(--fp-input-bg)",
+    color: "var(--fp-text-secondary)",
+  };
+
+  return (
+    <HexPanel contentStyle={{ padding: "20px 24px" }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        <div>
+          <p
+            style={{
+              fontSize: 11,
+              fontWeight: 800,
+              textTransform: "uppercase",
+              letterSpacing: "0.14em",
+              color: "var(--fp-text-muted)",
+              margin: "0 0 4px",
+            }}
+          >
+            Shelf assignment
+          </p>
+          <h2
+            style={{
+              color: "var(--fp-text-primary)",
+              fontSize: "clamp(18px, 4vw, 22px)",
+              fontWeight: 800,
+              margin: "0 0 4px",
+            }}
+          >
+            Pick a shelf for each image without a QR
+          </h2>
+          <p
+            style={{
+              color: "var(--fp-text-secondary)",
+              fontSize: 13,
+              margin: 0,
+            }}
+          >
+            {picks.length} image{picks.length === 1 ? "" : "s"} need
+            {picks.length === 1 ? "s" : ""} a shelf. Click an image to make it
+            active, then click the shelf on the floor plan where that photo was
+            taken.
+          </p>
+        </div>
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "minmax(220px, 280px) 1fr",
+            gap: 16,
+            alignItems: "flex-start",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 8,
+              maxHeight: canvasSize,
+              overflowY: "auto",
+              paddingRight: 4,
+            }}
+          >
+            {picks.map((pick, index) => {
+              const isActive = index === safeIndex;
+              const chosenShelf = pick.chosenShelfUid
+                ? deployedPlan.shelves.find(
+                    (shelf) => shelf.shelfUid === pick.chosenShelfUid
+                  )
+                : null;
+              const categoryLabel = chosenShelf
+                ? CATEGORIES.find((cat) => cat.id === chosenShelf.catId)
+                    ?.label ?? chosenShelf.catId
+                : null;
+              return (
+                <button
+                  key={pick.imageId}
+                  type="button"
+                  onClick={() => onActivePickIndexChange(index)}
+                  style={{
+                    textAlign: "left",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                    background: isActive
+                      ? "var(--fp-surface-secondary)"
+                      : "var(--fp-input-bg)",
+                    border: isActive
+                      ? "2px solid var(--fp-button-accent)"
+                      : "1px solid var(--fp-panel-border)",
+                    borderRadius: 10,
+                    padding: "8px 10px",
+                    cursor: "pointer",
+                  }}
+                >
+                  <Image
+                    src={pick.previewUrl}
+                    alt={`${pick.fileName} preview`}
+                    width={48}
+                    height={48}
+                    unoptimized
+                    style={{
+                      height: 48,
+                      width: 48,
+                      borderRadius: 8,
+                      border: "1px solid var(--fp-panel-border)",
+                      objectFit: "cover",
+                      flexShrink: 0,
+                      opacity: pick.skipped ? 0.4 : 1,
+                    }}
+                  />
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <p
+                      style={{
+                        color: "var(--fp-text-primary)",
+                        fontWeight: 600,
+                        fontSize: 12,
+                        margin: "0 0 2px",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {index + 1}. {pick.fileName}
+                    </p>
+                    <p
+                      style={{
+                        color: pick.skipped
+                          ? "#f87171"
+                          : pick.chosenShelfUid
+                            ? "#6ee7b7"
+                            : "var(--fp-text-muted)",
+                        fontSize: 11,
+                        margin: 0,
+                      }}
+                    >
+                      {pick.skipped
+                        ? "Skipped"
+                        : chosenShelf && categoryLabel
+                          ? `${categoryLabel} · ${chosenShelf.shelfUid.slice(0, 8)}`
+                          : "No shelf selected"}
+                    </p>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <div
+              style={{
+                background: "var(--fp-surface-secondary)",
+                border: "1px solid var(--fp-panel-border)",
+                borderRadius: 10,
+                padding: "10px 12px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 12,
+                flexWrap: "wrap",
+              }}
+            >
+              <div style={{ minWidth: 0 }}>
+                <p
+                  style={{
+                    color: "var(--fp-text-muted)",
+                    fontSize: 11,
+                    fontWeight: 700,
+                    textTransform: "uppercase",
+                    letterSpacing: "0.12em",
+                    margin: "0 0 2px",
+                  }}
+                >
+                  Active image
+                </p>
+                <p
+                  style={{
+                    color: "var(--fp-text-primary)",
+                    fontSize: 13,
+                    fontWeight: 600,
+                    margin: 0,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {active ? active.fileName : "—"}
+                </p>
+              </div>
+              {active ? (
+                <button
+                  type="button"
+                  onClick={() => onToggleSkip(active.imageId)}
+                  style={{
+                    ...buttonBase,
+                    color: active.skipped ? "#f87171" : "var(--fp-text-secondary)",
+                  }}
+                >
+                  {active.skipped ? "Unskip this image" : "Skip this image"}
+                </button>
+              ) : null}
+            </div>
+
+            <div style={{ display: "flex", justifyContent: "center" }}>
+              <FloorPlanCanvas
+                canvasSize={canvasSize}
+                zones={renderedZones}
+                walls={[]}
+                markers={[]}
+                selected={
+                  active?.chosenShelfUid
+                    ? { id: active.chosenShelfUid, kind: "zone" }
+                    : null
+                }
+                onZoneClick={handleZoneClick}
+                renderZoneExtras={(zone) => {
+                  const fileNames = assignmentsByShelfUid.get(zone.id);
+                  if (!fileNames || fileNames.length === 0) return null;
+                  return (
+                    <span
+                      style={{
+                        position: "absolute",
+                        top: 2,
+                        right: 4,
+                        background: "rgba(15,23,42,0.85)",
+                        color: "#fff",
+                        borderRadius: 999,
+                        fontSize: 10,
+                        fontWeight: 700,
+                        padding: "2px 6px",
+                        pointerEvents: "none",
+                      }}
+                    >
+                      {fileNames.length}
+                    </span>
+                  );
+                }}
+              />
+            </div>
+          </div>
+        </div>
+
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            justifyContent: "flex-end",
+            gap: 8,
+          }}
+        >
+          <button type="button" onClick={onCancel} style={buttonBase}>
+            Cancel upload
+          </button>
+          <button
+            type="button"
+            onClick={onContinue}
+            disabled={!allResolved}
+            style={{
+              ...buttonBase,
+              background: "var(--fp-button-accent)",
+              color: "#fff",
+              border: "none",
+              cursor: allResolved ? "pointer" : "not-allowed",
+              opacity: allResolved ? 1 : 0.5,
+            }}
+          >
+            Save with selected shelves
+          </button>
+        </div>
+      </div>
+    </HexPanel>
+  );
+}
+
 export default function InventoryPage() {
   const [selectedImages, setSelectedImages] = useState<SelectedUploadImage[]>([]);
-  const [shelfName, setShelfName] = useState("");
-  const [shelfLocationDescription, setShelfLocationDescription] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [batchNotes, setBatchNotes] = useState<string[]>([]);
-  const [replaceExistingInventory, setReplaceExistingInventory] = useState(true);
+  const [deployedPlan, setDeployedPlan] = useState<DeployedFloorPlan | null>(null);
+  const [pendingUpload, setPendingUpload] = useState<PendingUploadState | null>(null);
+  const [activePickIndex, setActivePickIndex] = useState(0);
 
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const selectedImagesRef = useRef<SelectedUploadImage[]>([]);
@@ -1193,18 +2511,67 @@ export default function InventoryPage() {
     };
   }, []);
 
-  const addFiles = (files: File[]) => {
+  // Pull the deployed floor plan once so the manual shelf-picker fallback has
+  // something to show the admin when QR decoding fails. Silent-fail here —
+  // auto-QR still works even without a plan loaded.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const plan = await loadDeployedFloorPlan();
+        if (!cancelled) setDeployedPlan(plan);
+      } catch {
+        if (!cancelled) setDeployedPlan(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const addFiles = async (files: File[]) => {
     const imageFiles = files.filter((file) => file.type.startsWith("image/"));
     if (!imageFiles.length) {
       return;
     }
 
     setErrorMessage("");
-    setStatusMessage("");
+
+    const oversizedCount = imageFiles.filter(
+      (file) => file.size > MAX_UPLOAD_BYTES
+    ).length;
+    if (oversizedCount > 0) {
+      setStatusMessage(
+        `Compressing ${oversizedCount} image${oversizedCount === 1 ? "" : "s"} to under 1 MB…`
+      );
+    } else {
+      setStatusMessage("");
+    }
+
+    const processed = await Promise.all(
+      imageFiles.map(async (file) => {
+        try {
+          return await compressImageFileUnderLimit(file);
+        } catch {
+          return file;
+        }
+      })
+    );
+
+    if (oversizedCount > 0) {
+      const stillLarge = processed.filter(
+        (file) => file.size > MAX_UPLOAD_BYTES
+      ).length;
+      setStatusMessage(
+        stillLarge > 0
+          ? `Compressed ${oversizedCount - stillLarge}/${oversizedCount} image${oversizedCount === 1 ? "" : "s"} under 1 MB. ${stillLarge} could not be reduced further.`
+          : `Compressed ${oversizedCount} image${oversizedCount === 1 ? "" : "s"} to under 1 MB.`
+      );
+    }
 
     setSelectedImages((previous) => {
       const startIndex = previous.length;
-      const additions = imageFiles.map((file, offset) => ({
+      const additions = processed.map((file, offset) => ({
         id: createUploadImageId(file, startIndex + offset),
         file,
         previewUrl: URL.createObjectURL(file),
@@ -1218,7 +2585,7 @@ export default function InventoryPage() {
 
   const onImagesChange = (event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files || []);
-    addFiles(files);
+    void addFiles(files);
     event.target.value = "";
   };
 
@@ -1246,6 +2613,222 @@ export default function InventoryPage() {
     setBatchNotes([]);
   };
 
+  // Phase 2: analyze every image we have a shelf target for, then DELETE +
+  // POST to replace inventory. Shared by both the all-auto-QR path and the
+  // "continue after manual shelf picks" path, so the behavior is identical.
+  const runAnalyzeAndSave = async (input: {
+    imagesSnapshot: SelectedUploadImage[];
+    targetsById: Record<string, ShelfQrTarget>;
+    initialNotes: string[];
+    initialFailedCount: number;
+  }) => {
+    const { imagesSnapshot, targetsById, initialNotes } = input;
+    const notes = [...initialNotes];
+    let failedCount = input.initialFailedCount;
+
+    const shelfBatches = new Map<string, ShelfSaveBatch>();
+    let processedCount = 0;
+
+    for (const selected of imagesSnapshot) {
+      processedCount += 1;
+      const shelfTarget = targetsById[selected.id];
+      if (!shelfTarget) {
+        // Image was skipped / unresolved — surface an error row and move on.
+        continue;
+      }
+
+      const resolvedShelfName = shelfTarget.shelfName;
+
+      try {
+        setStatusMessage(
+          `Analyzing ${processedCount}/${imagesSnapshot.length}: ${selected.file.name} → ${resolvedShelfName} (uncertain items will be re-verified with a tighter crop)`
+        );
+
+        setSelectedImages((previous) =>
+          previous.map((image) =>
+            image.id === selected.id ? { ...image, status: "processing" } : image
+          )
+        );
+
+        const analyzed = await analyzeOneImage(selected.file, resolvedShelfName);
+
+        const batchKey = shelfTarget.shelfTag;
+        const existingBatch = shelfBatches.get(batchKey);
+
+        if (existingBatch) {
+          existingBatch.rows.push(...analyzed.rows);
+        } else {
+          shelfBatches.set(batchKey, {
+            shelfName: resolvedShelfName,
+            shelfTag: shelfTarget.shelfTag,
+            rows: [...analyzed.rows],
+          });
+        }
+
+        notes.push(...analyzed.notes.map((note) => `${selected.file.name}: ${note}`));
+
+        setSelectedImages((previous) =>
+          previous.map((image) =>
+            image.id === selected.id
+              ? {
+                  ...image,
+                  status: "done",
+                  detectedCount: analyzed.detectedCount,
+                  errorMessage: null,
+                }
+              : image
+          )
+        );
+      } catch (imageError) {
+        failedCount += 1;
+        const message =
+          imageError instanceof Error
+            ? imageError.message
+            : "Unexpected error while processing this image.";
+
+        setSelectedImages((previous) =>
+          previous.map((image) =>
+            image.id === selected.id
+              ? {
+                  ...image,
+                  status: "error",
+                  errorMessage: message,
+                  detectedCount: 0,
+                }
+              : image
+          )
+        );
+      }
+    }
+
+    const batches = Array.from(shelfBatches.values()).filter(
+      (batch) => batch.rows.length > 0
+    );
+
+    if (!batches.length) {
+      setErrorMessage(
+        "No inventory items were saved. Ensure each image has a readable shelf QR and visible products."
+      );
+      setBatchNotes(notes);
+      return;
+    }
+
+    for (const batch of batches) {
+      const { merged, mergedGroupCount, mergedExtraRowCount } = mergeDuplicateRows(
+        batch.rows
+      );
+
+      if (mergedGroupCount > 0) {
+        notes.push(
+          `${batch.shelfName}: merged ${mergedExtraRowCount} duplicate detection${mergedExtraRowCount === 1 ? "" : "s"} into ${mergedGroupCount} consolidated product${mergedGroupCount === 1 ? "" : "s"}.`
+        );
+      }
+
+      batch.rows = merged;
+    }
+
+    let clearedCount = 0;
+    let inventoryCleared = false;
+    setStatusMessage("Clearing existing inventory before replacement...");
+    const deleteResponse = await fetch(
+      "/api/dataconnect/inventory-items?scope=all",
+      { method: "DELETE" }
+    );
+    const { json: deleteJson, text: deleteText } = await readApiPayload(deleteResponse);
+    const deletePayload = (deleteJson || {}) as {
+      deletedCount?: number;
+      error?: string;
+    };
+    if (!deleteResponse.ok) {
+      const detail = deleteText.trim().startsWith("<!DOCTYPE")
+        ? "Received HTML instead of JSON while clearing inventory."
+        : deleteText.slice(0, 160);
+      throw new Error(
+        deletePayload.error ||
+          `Clear existing inventory failed (${deleteResponse.status}). ${detail}`
+      );
+    }
+    clearedCount = Number(deletePayload.deletedCount ?? 0);
+    inventoryCleared = true;
+
+    let requestedCount = 0;
+    let withLocationCount = 0;
+    let savedCount = 0;
+    const persistenceModes = new Set<string>();
+
+    for (let index = 0; index < batches.length; index += 1) {
+      const batch = batches[index];
+      setStatusMessage(
+        `Saving shelf ${index + 1}/${batches.length}: ${batch.shelfName} (${batch.rows.length} rows)`
+      );
+
+      const saveResponse = await fetch("/api/dataconnect/inventory-items", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          shelfName: batch.shelfName,
+          shelfTag: batch.shelfTag || undefined,
+          items: batch.rows,
+        }),
+      });
+
+      const { json: saveJson, text: saveText } = await readApiPayload(saveResponse);
+      const savePayload = (saveJson || {}) as SaveInventoryResponse;
+
+      if (!saveResponse.ok) {
+        const detail = saveText.trim().startsWith("<!DOCTYPE")
+          ? "Received HTML instead of JSON while saving inventory."
+          : saveText.slice(0, 160);
+        const baseMessage =
+          savePayload.error || `Save failed (${saveResponse.status}). ${detail}`;
+        const doneBatches = index;
+        throw new Error(
+          inventoryCleared
+            ? `Inventory was already cleared (${clearedCount} items removed) and ${doneBatches}/${batches.length} shelves saved before this failure. Retry the upload to finish replacing inventory. Cause: ${baseMessage}`
+            : baseMessage
+        );
+      }
+
+      const batchRequested =
+        savePayload.metadata?.requestedCount ?? batch.rows.length;
+      const batchWithLocation =
+        savePayload.metadata?.withLocationCount ??
+        batch.rows.filter(
+          (row) =>
+            row.locationCenterX !== null &&
+            row.locationCenterX !== undefined &&
+            row.locationCenterY !== null &&
+            row.locationCenterY !== undefined &&
+            row.locationRadius !== null &&
+            row.locationRadius !== undefined
+        ).length;
+      const batchSavedCount = Number(savePayload.savedCount ?? batch.rows.length);
+
+      requestedCount += batchRequested;
+      withLocationCount += batchWithLocation;
+      savedCount += batchSavedCount;
+
+      if (savePayload.metadata?.persistenceMode) {
+        persistenceModes.add(savePayload.metadata.persistenceMode);
+      }
+    }
+
+    const persistenceMode =
+      persistenceModes.size > 0
+        ? Array.from(persistenceModes).join(", ")
+        : "unknown";
+
+    const replacementSummary = `Cleared ${clearedCount} previous item${clearedCount === 1 ? "" : "s"} then added ${savedCount}`;
+
+    setStatusMessage(
+      `${replacementSummary} item row${savedCount === 1 ? "" : "s"} across ${batches.length} shelf group${batches.length === 1 ? "" : "s"} from ${imagesSnapshot.length} image${imagesSnapshot.length === 1 ? "" : "s"}. Failed images: ${failedCount}. Metadata on ${withLocationCount}/${requestedCount} rows. Persistence mode: ${persistenceMode}.`
+    );
+    setBatchNotes(notes);
+  };
+
+  // Phase 1: scan every image for a shelf QR. Auto-matched images get their
+  // ShelfQrTarget; anything without a decodable QR is collected into a queue
+  // for manual shelf picking from the deployed floor plan.
   const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setErrorMessage("");
@@ -1254,11 +2837,6 @@ export default function InventoryPage() {
 
     if (!selectedImages.length) {
       setErrorMessage("Upload one or more images first.");
-      return;
-    }
-
-    if (!shelfName.trim()) {
-      setErrorMessage("Shelf group name is required.");
       return;
     }
 
@@ -1273,53 +2851,121 @@ export default function InventoryPage() {
     );
 
     const imagesSnapshot = [...selectedImagesRef.current];
-    const rowsForSave: Array<Record<string, unknown>> = [];
+    const autoTargets: Record<string, ShelfQrTarget> = {};
+    const manualPicks: ManualShelfPick[] = [];
     const notes: string[] = [];
-
-    let processedCount = 0;
     let failedCount = 0;
 
+    // Set of shelf_uids that actually exist on the deployed floor plan. We use
+    // this to *validate* decoded QR payloads — a QR can physically decode but
+    // reference a shelf that isn't on the current plan (e.g. stale QR prints
+    // like `legacy-2`). Those would persist with a shelfTag that no zone can
+    // match on the student page, so we route them to the manual picker.
+    const deployedShelfUids = new Set(
+      (deployedPlan?.shelves ?? []).map((shelf) => shelf.shelfUid.toLowerCase())
+    );
+    const haveDeployedShelves = deployedShelfUids.size > 0;
+
     try {
-      for (const selected of imagesSnapshot) {
-        processedCount += 1;
+      for (let i = 0; i < imagesSnapshot.length; i += 1) {
+        const selected = imagesSnapshot[i];
 
         setStatusMessage(
-          `Analyzing ${processedCount}/${imagesSnapshot.length}: ${selected.file.name} (uncertain items will be re-verified with a tighter crop)`
+          `Scanning shelf QR ${i + 1}/${imagesSnapshot.length}: ${selected.file.name} (native decoder, AI locator fallback)`
         );
-
         setSelectedImages((previous) =>
           previous.map((image) =>
             image.id === selected.id ? { ...image, status: "processing" } : image
           )
         );
 
+        let shelfTarget: ShelfQrTarget | null = null;
         try {
-          const analyzed = await analyzeOneImage(selected.file, shelfName.trim());
-          rowsForSave.push(...analyzed.rows);
-          notes.push(...analyzed.notes.map((note) => `${selected.file.name}: ${note}`));
+          shelfTarget = await detectShelfQrTarget(selected.file);
+        } catch (qrError) {
+          const message =
+            qrError instanceof Error
+              ? qrError.message
+              : "Unable to scan shelf QR from this image.";
+          notes.push(`${selected.file.name}: ${message}`);
+        }
 
+        // Reject QR payloads whose shelf_uid isn't on the deployed floor plan.
+        // If we saved with that uid anyway, `renderedZones.find(zone.id === uid)`
+        // on the student page would fail and the item would show up without a
+        // shelf mapping ("not on the current floor plan yet").
+        if (
+          shelfTarget &&
+          haveDeployedShelves &&
+          !deployedShelfUids.has(shelfTarget.shelfUid.toLowerCase())
+        ) {
+          notes.push(
+            `${selected.file.name}: decoded shelf QR "${shelfTarget.shelfUid}" is not on the deployed floor plan — asking for manual assignment.`
+          );
+          shelfTarget = null;
+        }
+
+        if (shelfTarget) {
+          autoTargets[selected.id] = shelfTarget;
+          notes.push(
+            `${selected.file.name}: matched shelf QR ${shelfTarget.shelfUid}${
+              shelfTarget.planId ? ` (plan ${shelfTarget.planId})` : ""
+            }.`
+          );
+          setSelectedImages((previous) =>
+            previous.map((image) =>
+              image.id === selected.id ? { ...image, status: "pending" } : image
+            )
+          );
+        } else {
+          manualPicks.push({
+            imageId: selected.id,
+            fileName: selected.file.name,
+            previewUrl: selected.previewUrl,
+            file: selected.file,
+            chosenShelfUid: null,
+            skipped: false,
+          });
           setSelectedImages((previous) =>
             previous.map((image) =>
               image.id === selected.id
                 ? {
                     ...image,
-                    status: "done",
-                    detectedCount: analyzed.detectedCount,
-                    errorMessage: null,
+                    status: "pending",
+                    errorMessage: "Shelf QR not detected — awaiting manual pick.",
                   }
                 : image
             )
           );
-        } catch (imageError) {
+        }
+      }
+
+      // Nothing to pick manually → run Phase 2 immediately.
+      if (!manualPicks.length) {
+        try {
+          await runAnalyzeAndSave({
+            imagesSnapshot,
+            targetsById: autoTargets,
+            initialNotes: notes,
+            initialFailedCount: failedCount,
+          });
+        } finally {
+          setIsSubmitting(false);
+        }
+        return;
+      }
+
+      // If we have pending images but no deployed floor plan loaded, there is
+      // no UI to pick from — mark those images as errored like before.
+      if (!deployedPlan || deployedPlan.shelves.length === 0) {
+        for (const pick of manualPicks) {
           failedCount += 1;
           const message =
-            imageError instanceof Error
-              ? imageError.message
-              : "Unexpected error while processing this image.";
-
+            "No shelf QR detected and no deployed floor plan is available for manual assignment.";
+          notes.push(`${pick.fileName}: ${message}`);
           setSelectedImages((previous) =>
             previous.map((image) =>
-              image.id === selected.id
+              image.id === pick.imageId
                 ? {
                     ...image,
                     status: "error",
@@ -1330,96 +2976,145 @@ export default function InventoryPage() {
             )
           );
         }
-      }
 
-      if (!rowsForSave.length) {
-        setErrorMessage("No inventory items were detected. Nothing was added.");
-        setBatchNotes(notes);
+        try {
+          if (Object.keys(autoTargets).length) {
+            await runAnalyzeAndSave({
+              imagesSnapshot,
+              targetsById: autoTargets,
+              initialNotes: notes,
+              initialFailedCount: failedCount,
+            });
+          } else {
+            setErrorMessage(
+              "No inventory items were saved. No shelf QR was detected and no deployed floor plan is available for manual assignment."
+            );
+            setBatchNotes(notes);
+          }
+        } finally {
+          setIsSubmitting(false);
+        }
         return;
       }
 
-      const { merged: dedupedRows, mergedGroupCount, mergedExtraRowCount } =
-        mergeDuplicateRows(rowsForSave);
-
-      if (mergedGroupCount > 0) {
-        notes.push(
-          `Merged ${mergedExtraRowCount} duplicate detection${mergedExtraRowCount === 1 ? "" : "s"} into ${mergedGroupCount} consolidated product${mergedGroupCount === 1 ? "" : "s"} (same type + core name + size).`
-        );
-      }
-
-      rowsForSave.length = 0;
-      rowsForSave.push(...dedupedRows);
-
-      let clearedCount = 0;
-      if (replaceExistingInventory) {
-        setStatusMessage("Clearing existing inventory before replacement...");
-        const deleteResponse = await fetch(
-          "/api/dataconnect/inventory-items?scope=all",
-          { method: "DELETE" }
-        );
-        const { json: deleteJson, text: deleteText } = await readApiPayload(deleteResponse);
-        const deletePayload = (deleteJson || {}) as {
-          deletedCount?: number;
-          error?: string;
-        };
-        if (!deleteResponse.ok) {
-          const detail = deleteText.trim().startsWith("<!DOCTYPE")
-            ? "Received HTML instead of JSON while clearing inventory."
-            : deleteText.slice(0, 160);
-          throw new Error(
-            deletePayload.error ||
-              `Clear existing inventory failed (${deleteResponse.status}). ${detail}`
-          );
-        }
-        clearedCount = Number(deletePayload.deletedCount ?? 0);
-      }
-
-      setStatusMessage(`Saving ${rowsForSave.length} detected item rows to inventory...`);
-
-      const saveResponse = await fetch("/api/dataconnect/inventory-items", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          shelfName: shelfName.trim(),
-          shelfLocationDescription: shelfLocationDescription.trim() || undefined,
-          items: rowsForSave,
-        }),
-      });
-
-      const { json: saveJson, text: saveText } = await readApiPayload(saveResponse);
-      const savePayload = (saveJson || {}) as SaveInventoryResponse;
-
-      if (!saveResponse.ok) {
-        const detail = saveText.trim().startsWith("<!DOCTYPE")
-          ? "Received HTML instead of JSON while saving inventory."
-          : saveText.slice(0, 160);
-        throw new Error(savePayload.error || `Save failed (${saveResponse.status}). ${detail}`);
-      }
-
-      const requestedCount = savePayload.metadata?.requestedCount ?? rowsForSave.length;
-      const withLocationCount =
-        savePayload.metadata?.withLocationCount ??
-        rowsForSave.filter(
-          (row) =>
-            row.locationCenterX !== null &&
-            row.locationCenterX !== undefined &&
-            row.locationCenterY !== null &&
-            row.locationCenterY !== undefined &&
-            row.locationRadius !== null &&
-            row.locationRadius !== undefined
-        ).length;
-
-      const savedCount = Number(savePayload.savedCount ?? rowsForSave.length);
-      const persistenceMode = savePayload.metadata?.persistenceMode || "unknown";
-
-      const replacementSummary = replaceExistingInventory
-        ? `Cleared ${clearedCount} previous item${clearedCount === 1 ? "" : "s"} then added ${savedCount}`
-        : `Added ${savedCount}`;
-
+      // Open the manual shelf picker and let the admin resolve each pending
+      // image; Phase 2 runs when they click "Save with selected shelves".
       setStatusMessage(
-        `${replacementSummary} item row${savedCount === 1 ? "" : "s"} from ${imagesSnapshot.length} image${imagesSnapshot.length === 1 ? "" : "s"}. Failed images: ${failedCount}. Metadata on ${withLocationCount}/${requestedCount} rows. Persistence mode: ${persistenceMode}.`
+        `${manualPicks.length} image${manualPicks.length === 1 ? "" : "s"} need${manualPicks.length === 1 ? "s" : ""} a shelf assignment from the floor plan.`
       );
-      setBatchNotes(notes);
+      setPendingUpload({
+        imagesSnapshot,
+        autoTargets,
+        notes,
+        failedCount,
+        manualPicks,
+      });
+      setActivePickIndex(0);
+      setIsSubmitting(false);
+    } catch (submitError) {
+      setErrorMessage(
+        submitError instanceof Error
+          ? submitError.message
+          : "Unexpected error while scanning images."
+      );
+      setIsSubmitting(false);
+    }
+  };
+
+  const continueAfterManualPicks = async () => {
+    if (!pendingUpload) return;
+
+    const targetsById: Record<string, ShelfQrTarget> = {
+      ...pendingUpload.autoTargets,
+    };
+    const notes = [...pendingUpload.notes];
+    let failedCount = pendingUpload.failedCount;
+
+    const planId = deployedPlan?.planId ?? null;
+    const shelvesByUid = new Map<string, ShelfOption>();
+    if (deployedPlan) {
+      for (const shelf of deployedPlan.shelves) {
+        shelvesByUid.set(shelf.shelfUid, shelf);
+      }
+    }
+
+    for (const pick of pendingUpload.manualPicks) {
+      if (pick.skipped) {
+        failedCount += 1;
+        const message = "Image skipped — no shelf assigned.";
+        notes.push(`${pick.fileName}: ${message}`);
+        setSelectedImages((previous) =>
+          previous.map((image) =>
+            image.id === pick.imageId
+              ? {
+                  ...image,
+                  status: "error",
+                  errorMessage: message,
+                  detectedCount: 0,
+                }
+              : image
+          )
+        );
+        continue;
+      }
+
+      if (!pick.chosenShelfUid || !planId) {
+        failedCount += 1;
+        const message = "No shelf selected for this image.";
+        notes.push(`${pick.fileName}: ${message}`);
+        setSelectedImages((previous) =>
+          previous.map((image) =>
+            image.id === pick.imageId
+              ? {
+                  ...image,
+                  status: "error",
+                  errorMessage: message,
+                  detectedCount: 0,
+                }
+              : image
+          )
+        );
+        continue;
+      }
+
+      const shelf = shelvesByUid.get(pick.chosenShelfUid);
+      if (!shelf) {
+        failedCount += 1;
+        const message = "Selected shelf is no longer on the deployed floor plan.";
+        notes.push(`${pick.fileName}: ${message}`);
+        setSelectedImages((previous) =>
+          previous.map((image) =>
+            image.id === pick.imageId
+              ? {
+                  ...image,
+                  status: "error",
+                  errorMessage: message,
+                  detectedCount: 0,
+                }
+              : image
+          )
+        );
+        continue;
+      }
+
+      const target = shelfOptionToQrTarget(shelf, planId);
+      targetsById[pick.imageId] = target;
+      notes.push(
+        `${pick.fileName}: manually assigned to shelf ${target.shelfUid} (plan ${target.planId}).`
+      );
+    }
+
+    setPendingUpload(null);
+    setActivePickIndex(0);
+    setIsSubmitting(true);
+
+    try {
+      await runAnalyzeAndSave({
+        imagesSnapshot: pendingUpload.imagesSnapshot,
+        targetsById,
+        initialNotes: notes,
+        initialFailedCount: failedCount,
+      });
     } catch (submitError) {
       setErrorMessage(
         submitError instanceof Error
@@ -1429,6 +3124,59 @@ export default function InventoryPage() {
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  const cancelManualPicker = () => {
+    if (!pendingUpload) return;
+    for (const pick of pendingUpload.manualPicks) {
+      setSelectedImages((previous) =>
+        previous.map((image) =>
+          image.id === pick.imageId
+            ? {
+                ...image,
+                status: "pending",
+                errorMessage: null,
+                detectedCount: 0,
+              }
+            : image
+        )
+      );
+    }
+    setPendingUpload(null);
+    setActivePickIndex(0);
+    setStatusMessage("");
+  };
+
+  const updateManualPick = (imageId: string, shelfUid: string | null) => {
+    setPendingUpload((previous) => {
+      if (!previous) return previous;
+      return {
+        ...previous,
+        manualPicks: previous.manualPicks.map((pick) =>
+          pick.imageId === imageId
+            ? { ...pick, chosenShelfUid: shelfUid, skipped: false }
+            : pick
+        ),
+      };
+    });
+  };
+
+  const toggleSkipManualPick = (imageId: string) => {
+    setPendingUpload((previous) => {
+      if (!previous) return previous;
+      return {
+        ...previous,
+        manualPicks: previous.manualPicks.map((pick) =>
+          pick.imageId === imageId
+            ? {
+                ...pick,
+                skipped: !pick.skipped,
+                chosenShelfUid: pick.skipped ? pick.chosenShelfUid : null,
+              }
+            : pick
+        ),
+      };
+    });
   };
 
   const navLink = { padding: "8px 14px", borderRadius: 10, border: "1px solid var(--fp-panel-border)", color: "var(--fp-text-secondary)", fontSize: 13, fontWeight: 600, textDecoration: "none", background: "var(--fp-input-bg)" } as React.CSSProperties;
@@ -1473,169 +3221,132 @@ export default function InventoryPage() {
             </HexPanel>
           ) : null}
 
-          <HexPanel contentStyle={{ padding: "20px 24px" }}>
-            <form onSubmit={onSubmit} style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-              <div className="grid gap-3 md:grid-cols-2">
-                <label style={{ display: "flex", flexDirection: "column", gap: 6, color: "var(--fp-text-secondary)", fontSize: 13, fontWeight: 600 }}>
-                  Shelf group name
-                  <input
-                    type="text"
-                    value={shelfName}
-                    onChange={(event) => setShelfName(event.target.value)}
-                    placeholder="e.g. Dry Shelf - Week 4"
-                    style={{ background: "var(--fp-input-bg)", border: "1px solid var(--fp-panel-border)", color: "var(--fp-text-primary)", borderRadius: 8, padding: "8px 12px", fontSize: 13, outline: "none", width: "100%", boxSizing: "border-box" }}
-                    required
-                  />
-                </label>
+          {!isSubmitting && pendingUpload && deployedPlan ? (
+            <ManualShelfPicker
+              pendingUpload={pendingUpload}
+              deployedPlan={deployedPlan}
+              activePickIndex={activePickIndex}
+              onActivePickIndexChange={setActivePickIndex}
+              onUpdatePick={updateManualPick}
+              onToggleSkip={toggleSkipManualPick}
+              onCancel={cancelManualPicker}
+              onContinue={continueAfterManualPicks}
+            />
+          ) : null}
 
-                <label style={{ display: "flex", flexDirection: "column", gap: 6, color: "var(--fp-text-secondary)", fontSize: 13, fontWeight: 600 }}>
-                  Shelf location (optional)
-                  <input
-                    type="text"
-                    value={shelfLocationDescription}
-                    onChange={(event) => setShelfLocationDescription(event.target.value)}
-                    placeholder="e.g. Back wall, aisle 2"
-                    style={{ background: "var(--fp-input-bg)", border: "1px solid var(--fp-panel-border)", color: "var(--fp-text-primary)", borderRadius: 8, padding: "8px 12px", fontSize: 13, outline: "none", width: "100%", boxSizing: "border-box" }}
-                  />
-                </label>
-              </div>
+          {!isSubmitting && !pendingUpload ? (
+            <HexPanel contentStyle={{ padding: "20px 24px" }}>
+              <form onSubmit={onSubmit} style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+                <p style={{ border: "1px solid rgba(220,50,50,0.4)", background: "rgba(180,30,30,0.10)", color: "#fca5a5", borderRadius: 10, padding: "10px 12px", fontSize: 13, margin: 0, fontWeight: 600 }}>
+                  Upload is always replace-only. All current inventory will be deleted before new items are saved.
+                </p>
 
-              <div style={{ background: "var(--fp-surface-secondary)", border: "1px solid var(--fp-panel-border)", borderRadius: 12, padding: 16 }}>
-                <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-                  <p style={{ color: "var(--fp-text-secondary)", fontSize: 13, fontWeight: 700, margin: 0 }}>
-                    Images ({selectedImages.length})
-                  </p>
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <button
-                      type="button"
-                      onClick={onOpenFilePicker}
-                      style={{ background: "var(--fp-button-accent)", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 13, padding: "7px 16px", cursor: "pointer" }}
-                    >
-                      Upload images
-                    </button>
-                    <button
-                      type="button"
-                      onClick={onClearAll}
-                      disabled={!selectedImages.length || isSubmitting}
-                      style={{ border: "1px solid var(--fp-panel-border)", background: "var(--fp-input-bg)", color: "var(--fp-text-secondary)", borderRadius: 8, fontSize: 13, fontWeight: 600, padding: "7px 14px", cursor: "pointer", opacity: (!selectedImages.length || isSubmitting) ? 0.5 : 1 }}
-                    >
-                      Clear all
-                    </button>
+                <p style={{ border: "1px solid var(--fp-panel-border)", background: "var(--fp-surface-secondary)", color: "var(--fp-text-secondary)", borderRadius: 10, padding: "10px 12px", fontSize: 13, margin: 0 }}>
+                  We try to decode a shelf QR in every image. If that fails you&apos;ll be asked to click the matching shelf on the floor plan before saving.
+                </p>
+
+                <div style={{ background: "var(--fp-surface-secondary)", border: "1px solid var(--fp-panel-border)", borderRadius: 12, padding: 16 }}>
+                  <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+                    <p style={{ color: "var(--fp-text-secondary)", fontSize: 13, fontWeight: 700, margin: 0 }}>
+                      Images ({selectedImages.length})
+                    </p>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button
+                        type="button"
+                        onClick={onOpenFilePicker}
+                        style={{ background: "var(--fp-button-accent)", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 13, padding: "7px 16px", cursor: "pointer" }}
+                      >
+                        Upload images
+                      </button>
+                      <button
+                        type="button"
+                        onClick={onClearAll}
+                        disabled={!selectedImages.length}
+                        style={{ border: "1px solid var(--fp-panel-border)", background: "var(--fp-input-bg)", color: "var(--fp-text-secondary)", borderRadius: 8, fontSize: 13, fontWeight: 600, padding: "7px 14px", cursor: "pointer", opacity: !selectedImages.length ? 0.5 : 1 }}
+                      >
+                        Clear all
+                      </button>
+                    </div>
+                  </div>
+
+                  <input
+                    ref={uploadInputRef}
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    onChange={onImagesChange}
+                    className="hidden"
+                  />
+
+                  <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+                    {selectedImages.length ? (
+                      selectedImages.map((selected, index) => (
+                        <article
+                          key={selected.id}
+                          style={{ display: "flex", alignItems: "center", gap: 12, background: "var(--fp-input-bg)", border: "1px solid var(--fp-panel-border)", borderRadius: 10, padding: "8px 10px" }}
+                        >
+                          <Image
+                            src={selected.previewUrl}
+                            alt={`${selected.file.name} preview`}
+                            width={72}
+                            height={72}
+                            unoptimized
+                            style={{ height: 56, width: 56, borderRadius: 8, border: "1px solid var(--fp-panel-border)", objectFit: "cover", flexShrink: 0 }}
+                          />
+
+                          <div style={{ minWidth: 0, flex: 1 }}>
+                            <p style={{ color: "var(--fp-text-primary)", fontWeight: 600, fontSize: 13, margin: "0 0 2px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              {index + 1}. {selected.file.name}
+                            </p>
+                            <p style={{ color: "var(--fp-text-muted)", fontSize: 12, margin: "0 0 2px" }}>
+                              {(selected.file.size / 1024 / 1024).toFixed(2)} MB
+                            </p>
+                            <p style={{ fontSize: 12, margin: 0, color: selected.status === "error" ? "#f87171" : selected.status === "done" ? "#6ee7b7" : "var(--fp-text-muted)" }}>
+                              {selected.status === "pending" ? "Waiting" : null}
+                              {selected.status === "processing" ? "Processing..." : null}
+                              {selected.status === "done"
+                                ? `Done · ${selected.detectedCount} detected`
+                                : null}
+                              {selected.status === "error"
+                                ? `Failed${selected.errorMessage ? ` · ${selected.errorMessage}` : ""}`
+                                : null}
+                            </p>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => onRemoveImage(selected.id)}
+                            style={{ border: "1px solid var(--fp-panel-border)", background: "var(--fp-input-bg)", color: "var(--fp-text-secondary)", borderRadius: 8, fontSize: 12, fontWeight: 600, padding: "5px 12px", cursor: "pointer", flexShrink: 0 }}
+                          >
+                            Remove
+                          </button>
+                        </article>
+                      ))
+                    ) : (
+                      <p style={{ border: "1px dashed var(--fp-panel-border)", color: "var(--fp-text-muted)", background: "transparent", borderRadius: 10, padding: "24px 16px", textAlign: "center", fontSize: 13, margin: 0 }}>
+                        No images yet. Upload one or more shelf photos.
+                      </p>
+                    )}
                   </div>
                 </div>
 
-                <input
-                  ref={uploadInputRef}
-                  type="file"
-                  accept="image/*"
-                  multiple
-                  onChange={onImagesChange}
-                  className="hidden"
-                />
-
-                <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 8 }}>
-                  {selectedImages.length ? (
-                    selectedImages.map((selected, index) => (
-                      <article
-                        key={selected.id}
-                        style={{ display: "flex", alignItems: "center", gap: 12, background: "var(--fp-input-bg)", border: "1px solid var(--fp-panel-border)", borderRadius: 10, padding: "8px 10px" }}
-                      >
-                        <Image
-                          src={selected.previewUrl}
-                          alt={`${selected.file.name} preview`}
-                          width={72}
-                          height={72}
-                          unoptimized
-                          style={{ height: 56, width: 56, borderRadius: 8, border: "1px solid var(--fp-panel-border)", objectFit: "cover", flexShrink: 0 }}
-                        />
-
-                        <div style={{ minWidth: 0, flex: 1 }}>
-                          <p style={{ color: "var(--fp-text-primary)", fontWeight: 600, fontSize: 13, margin: "0 0 2px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                            {index + 1}. {selected.file.name}
-                          </p>
-                          <p style={{ color: "var(--fp-text-muted)", fontSize: 12, margin: "0 0 2px" }}>
-                            {(selected.file.size / 1024 / 1024).toFixed(2)} MB
-                          </p>
-                          <p style={{ fontSize: 12, margin: 0, color: selected.status === "error" ? "#f87171" : selected.status === "done" ? "#6ee7b7" : "var(--fp-text-muted)" }}>
-                            {selected.status === "pending" ? "Waiting" : null}
-                            {selected.status === "processing" ? "Processing..." : null}
-                            {selected.status === "done"
-                              ? `Done · ${selected.detectedCount} detected`
-                              : null}
-                            {selected.status === "error"
-                              ? `Failed${selected.errorMessage ? ` · ${selected.errorMessage}` : ""}`
-                              : null}
-                          </p>
-                        </div>
-
-                        <button
-                          type="button"
-                          onClick={() => onRemoveImage(selected.id)}
-                          disabled={isSubmitting}
-                          style={{ border: "1px solid var(--fp-panel-border)", background: "var(--fp-input-bg)", color: "var(--fp-text-secondary)", borderRadius: 8, fontSize: 12, fontWeight: 600, padding: "5px 12px", cursor: "pointer", flexShrink: 0, opacity: isSubmitting ? 0.5 : 1 }}
-                        >
-                          Remove
-                        </button>
-                      </article>
-                    ))
-                  ) : (
-                    <p style={{ border: "1px dashed var(--fp-panel-border)", color: "var(--fp-text-muted)", background: "transparent", borderRadius: 10, padding: "24px 16px", textAlign: "center", fontSize: 13, margin: 0 }}>
-                      No images yet. Upload one or more shelf photos.
-                    </p>
-                  )}
-                </div>
-              </div>
-
-              <label
-                style={{
-                  display: "flex", alignItems: "flex-start", gap: 12,
-                  borderRadius: 12, padding: "12px 16px", fontSize: 13, cursor: "pointer",
-                  border: replaceExistingInventory ? "1px solid rgba(220,50,50,0.4)" : "1px solid var(--fp-panel-border)",
-                  background: replaceExistingInventory ? "rgba(180,30,30,0.10)" : "rgba(50,80,130,0.12)",
-                  color: replaceExistingInventory ? "#f87171" : "var(--fp-text-secondary)",
-                }}
-              >
-                <input
-                  type="checkbox"
-                  checked={replaceExistingInventory}
-                  onChange={(event) => setReplaceExistingInventory(event.target.checked)}
-                  disabled={isSubmitting}
-                  style={{ marginTop: 2, width: 16, height: 16, cursor: "pointer", accentColor: "#dc2626", flexShrink: 0 }}
-                />
-                <span style={{ flex: 1 }}>
-                  <span style={{ display: "block", fontWeight: 700, fontSize: 13, marginBottom: 2 }}>
-                    Replace existing inventory
-                  </span>
-                  <span style={{ display: "block", fontSize: 12 }}>
-                    {replaceExistingInventory
-                      ? "All current inventory will be deleted before the new items are saved. This cannot be undone."
-                      : "Existing items will stay. The detected items will be added alongside them."}
-                  </span>
-                </span>
-              </label>
-
-              <button
-                type="submit"
-                disabled={isSubmitting || !selectedImages.length || !shelfName.trim()}
-                style={{
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  width: "100%", background: "var(--fp-button-accent)", color: "#fff",
-                  border: "none", borderRadius: 10, fontWeight: 700, fontSize: 14,
-                  padding: "11px 20px", cursor: (isSubmitting || !selectedImages.length || !shelfName.trim()) ? "not-allowed" : "pointer",
-                  opacity: (isSubmitting || !selectedImages.length || !shelfName.trim()) ? 0.5 : 1,
-                  boxSizing: "border-box",
-                }}
-              >
-                {isSubmitting
-                  ? replaceExistingInventory
-                    ? "Clearing inventory and uploading..."
-                    : "Uploading and adding inventory..."
-                  : replaceExistingInventory
-                    ? "Replace Inventory with These Images"
-                    : "Upload Images and Add to Inventory"}
-              </button>
-            </form>
-          </HexPanel>
+                <button
+                  type="submit"
+                  disabled={!selectedImages.length}
+                  style={{
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    width: "100%", background: "var(--fp-button-accent)", color: "#fff",
+                    border: "none", borderRadius: 10, fontWeight: 700, fontSize: 14,
+                    padding: "11px 20px", cursor: !selectedImages.length ? "not-allowed" : "pointer",
+                    opacity: !selectedImages.length ? 0.5 : 1,
+                    boxSizing: "border-box",
+                  }}
+                >
+                  Replace Inventory with These Images
+                </button>
+              </form>
+            </HexPanel>
+          ) : null}
 
           {batchNotes.length ? (
             <HexPanel contentStyle={{ padding: "16px 20px" }}>

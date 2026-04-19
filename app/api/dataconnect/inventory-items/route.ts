@@ -31,6 +31,7 @@ type InventoryItemRow = {
 type SaveInventoryItemsBody = {
   items?: InventoryItemRow[];
   shelfId?: string | null;
+  shelfTag?: string | null;
   shelfName?: string;
   shelfLocationDescription?: string;
 };
@@ -39,6 +40,7 @@ type ShelfSummary = {
   id: string;
   name: string | null;
   locationDescription: string | null;
+  shelfTag?: string | null;
 };
 
 type ItemLocation = {
@@ -178,6 +180,16 @@ mutation InsertShelf(
 }
 `.trim();
 
+const DEFAULT_SHELF_LIST_QUERY = `
+query ListShelves {
+  shelves(limit: 1000) {
+    id
+    name
+    locationDescription
+  }
+}
+`.trim();
+
 const DEFAULT_LIST_QUERY = `
 query StudentInventory {
   inventoryItems(limit: __LIMIT__) {
@@ -240,6 +252,7 @@ const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const LOCATION_MARKER_PREFIX = "[[LOC]]";
+const SHELF_TAG_MARKER_PREFIX = "[[SHELF_TAG]]";
 const LOCATION_SCHEMA_FIELDS = [
   "locationCenterX",
   "locationCenterY",
@@ -265,6 +278,54 @@ function normalizeText(value: string | null | undefined) {
     .replace(/[^a-z0-9]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function normalizeShelfTag(value: string | null | undefined) {
+  const trimmed = (value || "").trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  return trimmed.slice(0, 160);
+}
+
+function extractShelfTagMarker(locationDescription: string | null) {
+  if (!locationDescription) {
+    return null;
+  }
+
+  const markerIndex = locationDescription.lastIndexOf(SHELF_TAG_MARKER_PREFIX);
+  if (markerIndex < 0) {
+    return null;
+  }
+
+  const markerValue = locationDescription
+    .slice(markerIndex + SHELF_TAG_MARKER_PREFIX.length)
+    .trim();
+  return normalizeShelfTag(markerValue);
+}
+
+function stripShelfTagMarker(locationDescription: string | null) {
+  if (!locationDescription) {
+    return null;
+  }
+
+  const markerIndex = locationDescription.lastIndexOf(SHELF_TAG_MARKER_PREFIX);
+  if (markerIndex < 0) {
+    return locationDescription;
+  }
+
+  const trimmed = locationDescription.slice(0, markerIndex).trim();
+  return trimmed || null;
+}
+
+function appendShelfTagMarker(locationDescription: string, shelfTag: string | null) {
+  if (!shelfTag) {
+    return locationDescription;
+  }
+
+  const baseDescription = stripShelfTagMarker(locationDescription) || "";
+  return `${baseDescription}\n${SHELF_TAG_MARKER_PREFIX}${shelfTag}`.trim();
 }
 
 function normalizeNumber(value: unknown) {
@@ -507,9 +568,13 @@ function sanitizeShelfForClient(shelf: ShelfSummary | null) {
     return null;
   }
 
+  const noDomainMarker = stripHubDomainMarker(shelf.locationDescription);
+  const shelfTag = extractShelfTagMarker(noDomainMarker);
+
   return {
     ...shelf,
-    locationDescription: stripHubDomainMarker(shelf.locationDescription),
+    shelfTag,
+    locationDescription: stripShelfTagMarker(noDomainMarker),
   };
 }
 
@@ -599,6 +664,31 @@ function extractItemRows(data: Record<string, unknown> | null) {
   return [];
 }
 
+function extractShelfRows(data: Record<string, unknown> | null) {
+  if (!data) {
+    return [];
+  }
+
+  const direct = data.shelves;
+  if (Array.isArray(direct)) {
+    return direct;
+  }
+
+  for (const [key, value] of Object.entries(data)) {
+    if (Array.isArray(value) && key.toLowerCase().includes("shelf")) {
+      return value;
+    }
+  }
+
+  for (const value of Object.values(data)) {
+    if (Array.isArray(value)) {
+      return value;
+    }
+  }
+
+  return [];
+}
+
 function filterItems(
   items: StudentInventoryItem[],
   search: string,
@@ -642,6 +732,7 @@ function filterItems(
 
 async function ensureUploadShelf(body: SaveInventoryItemsBody, hubDomain: string) {
   const providedShelfId = normalizeUuid(body.shelfId);
+  const providedShelfTag = normalizeShelfTag(body.shelfTag);
   if (providedShelfId) {
     return {
       shelfId: providedShelfId,
@@ -653,11 +744,44 @@ async function ensureUploadShelf(body: SaveInventoryItemsBody, hubDomain: string
     };
   }
 
+  if (providedShelfTag) {
+    const { data } = await executeDataConnect(DEFAULT_SHELF_LIST_QUERY);
+    const shelves = extractShelfRows(data)
+      .map(normalizeShelf)
+      .filter((row): row is ShelfSummary => row !== null);
+
+    const matchedShelf = shelves.find((shelf) => {
+      const shelfDomain = extractHubDomainMarker(shelf.locationDescription);
+      if (!isHubVisibleToDomain(shelfDomain, hubDomain)) {
+        return false;
+      }
+
+      return extractShelfTagMarker(shelf.locationDescription) === providedShelfTag;
+    });
+
+    if (matchedShelf) {
+      return {
+        shelfId: matchedShelf.id,
+        shelf: sanitizeShelfForClient(matchedShelf) as ShelfSummary,
+      };
+    }
+  }
+
   const nowIso = new Date().toISOString();
   const shelfId = randomUUID();
-  const shelfName = body.shelfName?.trim() || `Upload ${nowIso.slice(0, 16).replace("T", " ")}`;
+  const shelfName =
+    body.shelfName?.trim() ||
+    (providedShelfTag
+      ? `Shelf ${providedShelfTag.slice(Math.max(0, providedShelfTag.length - 8))}`
+      : `Upload ${nowIso.slice(0, 16).replace("T", " ")}`);
+  const locationSeed =
+    body.shelfLocationDescription?.trim() ||
+    (providedShelfTag
+      ? `Linked from shelf QR ${providedShelfTag}`
+      : "Generated from inventory photo upload");
+  const withShelfTag = appendShelfTagMarker(locationSeed, providedShelfTag);
   const shelfLocationDescription = withHubDomainMarker(
-    body.shelfLocationDescription?.trim() || "Generated from inventory photo upload",
+    withShelfTag,
     hubDomain
   );
 
@@ -674,7 +798,9 @@ async function ensureUploadShelf(body: SaveInventoryItemsBody, hubDomain: string
     shelf: {
       id: shelfId,
       name: shelfName,
-      locationDescription: stripHubDomainMarker(shelfLocationDescription),
+      locationDescription: stripShelfTagMarker(
+        stripHubDomainMarker(shelfLocationDescription)
+      ),
     } as ShelfSummary,
   };
 }

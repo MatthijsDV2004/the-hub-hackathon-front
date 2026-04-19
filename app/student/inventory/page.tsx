@@ -2,13 +2,21 @@
 
 import Image from "next/image";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { QueryFetchPolicy } from "firebase/data-connect";
 import LoadingAnimation from "@/components/LoadingAnimation";
+import FloorPlanCanvas, {
+  FLOORPLAN_CANVAS_SIZE,
+  type CategoryId,
+} from "../../components/FloorPlanCanvas";
 import HexPanel from "../../components/HexPanel";
+import { dataConnect } from "../../../src/lib/firebase";
+import { getAllFloorPlans } from "../../../src/dataconnect-generated";
 
 type ShelfSummary = {
   id: string;
   name: string | null;
   locationDescription: string | null;
+  shelfTag?: string | null;
 };
 
 type ItemLocation = {
@@ -34,6 +42,46 @@ type StudentInventoryItem = {
   photoUrl: string | null;
   size: string | null;
   location: ItemLocation | null;
+};
+
+type MarkerType = "entrance" | "exit" | "help_desk";
+
+type FloorShelfRow = {
+  shelf_uid?: string;
+  cat_id: string;
+  limit_per_student: number;
+  orientation: string;
+  rotation: number;
+  map_x: number;
+  map_y: number;
+  map_w: number;
+  map_h: number;
+};
+
+type FloorWallRow = {
+  orientation: string;
+  rotation: number;
+  map_x: number;
+  map_y: number;
+  map_w: number;
+  map_h: number;
+};
+
+type FloorMarkerRow = {
+  type: MarkerType;
+  map_x: number;
+  map_y: number;
+  map_w: number;
+  map_h: number;
+};
+
+type FloorPlanRecord = {
+  id: string;
+  isDeployed?: boolean | null;
+  shelves?: unknown | null;
+  walls?: unknown | null;
+  markers?: unknown | null;
+  updatedAt?: string | null;
 };
 
 const CATEGORIES = [
@@ -264,6 +312,27 @@ function timeAgo(date: Date): string {
   return `${days} day${days === 1 ? "" : "s"} ago`;
 }
 
+function extractShelfUidFromShelfTag(shelfTag: string | null | undefined): string | null {
+  const normalized = (shelfTag || "").trim();
+  if (!normalized) return null;
+  const match = normalized.match(/:shelf:([a-z0-9_-]+)/i);
+  return match?.[1]?.trim() || null;
+}
+
+function extractShelfUidFromShelfName(shelfName: string | null | undefined): string | null {
+  const normalized = (shelfName || "").trim();
+  if (!normalized) return null;
+  const match = normalized.match(/([a-z0-9]{8})(?!.*[a-z0-9])/i);
+  return match?.[1]?.trim() || null;
+}
+
+function resolveShelfUidForItem(item: StudentInventoryItem): string | null {
+  return (
+    extractShelfUidFromShelfTag(item.shelf?.shelfTag) ||
+    extractShelfUidFromShelfName(item.shelf?.name)
+  );
+}
+
 export default function StudentInventoryPage() {
   const [items, setItems] = useState<StudentInventoryItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -273,7 +342,13 @@ export default function StudentInventoryPage() {
   const [zoomLevel, setZoomLevel] = useState(1.8);
   const [selectedCategory, setSelectedCategory] = useState("all");
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [mapShelves, setMapShelves] = useState<FloorShelfRow[]>([]);
+  const [mapWalls, setMapWalls] = useState<FloorWallRow[]>([]);
+  const [mapMarkers, setMapMarkers] = useState<FloorMarkerRow[]>([]);
+  const [locationItem, setLocationItem] = useState<StudentInventoryItem | null>(null);
+  const [locationError, setLocationError] = useState("");
   const [, setTick] = useState(0);
+  const mapSize = FLOORPLAN_CANVAS_SIZE;
 
   useEffect(() => {
     const id = setInterval(() => setTick((t) => t + 1), 30_000);
@@ -312,6 +387,50 @@ export default function StudentInventoryPage() {
     return () => { clearTimeout(timerId); };
   }, [loadInventory]);
 
+  useEffect(() => {
+    let active = true;
+
+    async function loadFloorPlan() {
+      try {
+        const res = await getAllFloorPlans(dataConnect, {
+          fetchPolicy: QueryFetchPolicy.SERVER_ONLY,
+        });
+        if (!active) return;
+
+        const deployedPlans = (res.data.floorPlans as FloorPlanRecord[])
+          .filter((plan) => plan.isDeployed)
+          .sort((a, b) => {
+            const aTime = a.updatedAt ? new Date(a.updatedAt).getTime() : 0;
+            const bTime = b.updatedAt ? new Date(b.updatedAt).getTime() : 0;
+            return bTime - aTime;
+          });
+
+        const plan = deployedPlans[0] || null;
+        if (!plan) {
+          setMapShelves([]);
+          setMapWalls([]);
+          setMapMarkers([]);
+          return;
+        }
+
+        setMapShelves((plan.shelves as FloorShelfRow[]) ?? []);
+        setMapWalls((plan.walls as FloorWallRow[]) ?? []);
+        setMapMarkers((plan.markers as FloorMarkerRow[]) ?? []);
+      } catch {
+        if (!active) return;
+        setMapShelves([]);
+        setMapWalls([]);
+        setMapMarkers([]);
+      }
+    }
+
+    void loadFloorPlan();
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
   const filteredItems = useMemo(() => {
     const normalizedSearch = normalizeText(searchTerm);
     return items.filter((item) => {
@@ -333,6 +452,76 @@ export default function StudentInventoryPage() {
     () => filteredItems.reduce((sum, item) => sum + item.quantity, 0),
     [filteredItems]
   );
+
+  const renderedZones = useMemo(() => {
+    const s = mapSize || 1;
+    return mapShelves.map((shelf, index) => ({
+      id:
+        typeof shelf.shelf_uid === "string" && shelf.shelf_uid.trim()
+          ? shelf.shelf_uid.trim()
+          : `zone-${index}`,
+      catId: shelf.cat_id as CategoryId,
+      limit: shelf.limit_per_student,
+      rotation: shelf.rotation,
+      x: shelf.map_x * s,
+      y: shelf.map_y * s,
+      w: shelf.map_w * s,
+      h: shelf.map_h * s,
+    }));
+  }, [mapShelves, mapSize]);
+
+  const renderedWalls = useMemo(() => {
+    const s = mapSize || 1;
+    return mapWalls.map((wall, index) => ({
+      id: `wall-${index}`,
+      rotation: wall.rotation,
+      x: wall.map_x * s,
+      y: wall.map_y * s,
+      w: wall.map_w * s,
+      h: wall.map_h * s,
+    }));
+  }, [mapWalls, mapSize]);
+
+  const renderedMarkers = useMemo(() => {
+    const s = mapSize || 1;
+    return mapMarkers.map((marker, index) => ({
+      id: `marker-${index}`,
+      type: marker.type,
+      x: marker.map_x * s,
+      y: marker.map_y * s,
+      w: marker.map_w * s,
+      h: marker.map_h * s,
+    }));
+  }, [mapMarkers, mapSize]);
+
+  const locationZoneId = useMemo(() => {
+    if (!locationItem) return null;
+    const shelfUid = resolveShelfUidForItem(locationItem);
+    if (!shelfUid) return null;
+    const match = renderedZones.find(
+      (zone) => zone.id.toLowerCase() === shelfUid.toLowerCase()
+    );
+    return match?.id ?? null;
+  }, [locationItem, renderedZones]);
+
+  const openLocationModal = (item: StudentInventoryItem) => {
+    const shelfUid = resolveShelfUidForItem(item);
+    const match = shelfUid
+      ? renderedZones.find((zone) => zone.id.toLowerCase() === shelfUid.toLowerCase())
+      : null;
+
+    setLocationItem(item);
+    setLocationError(
+      match
+        ? ""
+        : "This item does not have a shelf mapping on the current floor plan yet."
+    );
+  };
+
+  const closeLocationModal = () => {
+    setLocationItem(null);
+    setLocationError("");
+  };
 
   const closeZoomModal = () => {
     setZoomItem(null);
@@ -541,10 +730,12 @@ export default function StudentInventoryPage() {
               return (
                 <article
                   key={item.id}
+                  onClick={() => openLocationModal(item)}
                   className="flex flex-col overflow-hidden rounded-2xl border shadow-sm transition hover:shadow-md"
                   style={{
                     borderColor: "var(--fp-panel-border)",
                     background: "var(--fp-surface-secondary)",
+                    cursor: "pointer",
                   }}
                 >
                   {/* Image area */}
@@ -577,7 +768,8 @@ export default function StudentInventoryPage() {
                     {/* Zoom button */}
                     <button
                       type="button"
-                      onClick={() => {
+                      onClick={(event) => {
+                        event.stopPropagation();
                         setZoomItem(item);
                         setZoomLevel(initialZoomLevelFor(item));
                       }}
@@ -669,6 +861,135 @@ export default function StudentInventoryPage() {
             )}
           </div>
         )}
+
+        {/* Location modal */}
+        {locationItem ? (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center px-4 py-6"
+            style={{ background: "rgba(10,18,30,0.85)" }}
+          >
+            <style>{`
+              @keyframes shelf-dot-pulse {
+                0% { transform: translate(-50%, -50%) scale(0.6); opacity: 0.95; }
+                70% { transform: translate(-50%, -50%) scale(1.45); opacity: 0.2; }
+                100% { transform: translate(-50%, -50%) scale(1.75); opacity: 0; }
+              }
+            `}</style>
+            <div
+              className="w-full max-w-6xl rounded-2xl p-4 shadow-2xl"
+              style={{
+                border: "1px solid var(--fp-panel-border)",
+                background: "var(--fp-surface-primary)",
+              }}
+            >
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div>
+                  <p
+                    style={{
+                      fontSize: 14,
+                      fontWeight: 700,
+                      color: "var(--fp-text-primary)",
+                      margin: 0,
+                    }}
+                  >
+                    {buildDisplayProductTitle(locationItem)}
+                  </p>
+                  <p style={{ fontSize: 11, color: "var(--fp-text-muted)", margin: 0 }}>
+                    {locationItem.shelf?.name || "Shelf location"}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={closeLocationModal}
+                  style={{
+                    padding: "8px 16px",
+                    borderRadius: 8,
+                    border: "1px solid var(--fp-input-border)",
+                    background: "var(--fp-input-bg)",
+                    color: "var(--fp-text-secondary)",
+                    fontSize: 13,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
+                >
+                  Close
+                </button>
+              </div>
+
+              {locationError ? (
+                <div
+                  style={{
+                    marginBottom: 10,
+                    padding: "8px 10px",
+                    borderRadius: 8,
+                    border: "1px solid rgba(239,68,68,0.4)",
+                    background: "rgba(239,68,68,0.08)",
+                    color: "#fda4af",
+                    fontSize: 12,
+                    fontWeight: 600,
+                  }}
+                >
+                  {locationError}
+                </div>
+              ) : (
+                <p style={{ margin: "0 0 10px", fontSize: 12, color: "var(--fp-text-secondary)" }}>
+                  The pulsing red marker shows the mapped shelf section.
+                </p>
+              )}
+
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "center",
+                  maxHeight: "72vh",
+                  overflow: "auto",
+                  paddingBottom: 4,
+                }}
+              >
+                <FloorPlanCanvas
+                  canvasSize={mapSize}
+                  zones={renderedZones}
+                  walls={renderedWalls}
+                  markers={renderedMarkers}
+                  selected={locationZoneId ? { id: locationZoneId, kind: "zone" } : null}
+                  renderZoneExtras={(zone) =>
+                    zone.id === locationZoneId ? (
+                      <>
+                        <span
+                          style={{
+                            position: "absolute",
+                            left: "50%",
+                            top: "50%",
+                            width: 13,
+                            height: 13,
+                            borderRadius: 999,
+                            background: "#ef4444",
+                            transform: "translate(-50%, -50%)",
+                            boxShadow: "0 0 0 2px #fff, 0 0 14px rgba(239,68,68,0.85)",
+                            zIndex: 40,
+                          }}
+                        />
+                        <span
+                          style={{
+                            position: "absolute",
+                            left: "50%",
+                            top: "50%",
+                            width: 36,
+                            height: 36,
+                            borderRadius: 999,
+                            border: "2px solid rgba(239,68,68,0.68)",
+                            animation: "shelf-dot-pulse 1.35s ease-out infinite",
+                            zIndex: 39,
+                          }}
+                        />
+                      </>
+                    ) : null
+                  }
+                />
+              </div>
+            </div>
+          </div>
+        ) : null}
 
         {/* Zoom modal */}
         {zoomItem?.photoUrl

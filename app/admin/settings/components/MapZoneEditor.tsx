@@ -51,6 +51,7 @@ interface Marker {
 }
 
 interface SectionPayload {
+  shelf_uid?: string
   cat_id: CategoryId
   limit_per_student: number
   orientation: 'H' | 'V'
@@ -161,6 +162,13 @@ function uid(): string {
   return crypto.randomUUID().replace(/-/g, '').slice(0, 8)
 }
 
+function normalizeStoredShelfUid(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  return trimmed.slice(0, 64)
+}
+
 // ============================================================
 // SVG icons
 // ============================================================
@@ -235,7 +243,7 @@ const MapZoneEditor = forwardRef<MapZoneEditorRef, MapZoneEditorProps>(function 
   // ----------------------------------------------------------
   function hydratePayload(payload: SavePayload, s: number) {
     setZones(payload.sections.map(sec => ({
-      id: uid(),
+      id: normalizeStoredShelfUid(sec.shelf_uid) ?? uid(),
       catId: sec.cat_id as CategoryId,
       limit: sec.limit_per_student,
       orientation: sec.orientation as 'H' | 'V',
@@ -636,6 +644,7 @@ const MapZoneEditor = forwardRef<MapZoneEditorRef, MapZoneEditorProps>(function 
   function toSectionPayload(z: Zone): SectionPayload {
     const s = canvasSize || 1
     return {
+      shelf_uid: z.id,
       cat_id: z.catId,
       limit_per_student: z.limit,
       orientation: z.orientation,
@@ -980,6 +989,13 @@ const MapZoneEditor = forwardRef<MapZoneEditorRef, MapZoneEditorProps>(function 
         {selectedZone && (
           <HexPanel fill="var(--fp-surface-accent)" contentStyle={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 12 }}>
             <p style={sectionLabel}>Selected shelf</p>
+
+            <div style={{ borderRadius: 10, border: '1px solid var(--fp-input-border)', background: 'var(--fp-input-bg)', padding: '10px 12px' }}>
+              <p style={{ ...fieldLabel, marginBottom: 6 }}>Shelf ID</p>
+              <p style={{ margin: 0, fontFamily: 'monospace', fontSize: 13, fontWeight: 700, color: 'var(--fp-text-primary)' }}>
+                {selectedZone.id}
+              </p>
+            </div>
 
             <div>
               <label style={fieldLabel}>Category</label>

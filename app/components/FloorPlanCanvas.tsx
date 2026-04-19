@@ -191,7 +191,7 @@ interface FloorPlanCanvasProps {
   onZoneMouseDown?: (event: React.MouseEvent, id: string) => void
   onWallMouseDown?: (event: React.MouseEvent, id: string) => void
   onMarkerMouseDown?: (event: React.MouseEvent, id: string) => void
-  onZoneClick?: (catId: CategoryId) => void
+  onZoneClick?: (zone: FloorPlanZone) => void
   renderZoneExtras?: (zone: FloorPlanZone, isSelected: boolean) => React.ReactNode
   renderWallExtras?: (wall: FloorPlanWall, isSelected: boolean) => React.ReactNode
   renderMarkerExtras?: (marker: FloorPlanMarker, isSelected: boolean) => React.ReactNode
@@ -265,7 +265,7 @@ export default function FloorPlanCanvas({
             <div
               key={zone.id}
               onMouseDown={onZoneMouseDown ? event => onZoneMouseDown(event, zone.id) : undefined}
-              onClick={onZoneClick ? () => onZoneClick(zone.catId) : undefined}
+              onClick={onZoneClick ? () => onZoneClick(zone) : undefined}
               style={{
                 position: 'absolute',
                 left: zone.x,

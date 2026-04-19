@@ -336,9 +336,14 @@ export async function POST(request: Request) {
       model: geminiModel,
       text: result.text,
     });
-  } catch {
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Unknown analyzer error.";
+    console.error("[/api/analyze] failed:", error);
     return Response.json(
-      { error: "Invalid request payload or model response." },
+      {
+        error: `Analyzer failed: ${message.slice(0, 300)}`,
+      },
       { status: 500 }
     );
   }
