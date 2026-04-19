@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { QueryFetchPolicy } from 'firebase/data-connect'
 import FloorPlanCanvas, { CATEGORIES, FLOORPLAN_CANVAS_SIZE, MARKER_CONFIGS, MarkerIcon, type CategoryId, type FloorPlanZone } from '../components/FloorPlanCanvas'
 import HexPanel from '../components/HexPanel'
@@ -131,6 +131,18 @@ export default function MapPage() {
   const [itemsError,           setItemsError]           = useState<string | null>(null)
   const [selectedZone,         setSelectedZone]         = useState<FloorPlanZone | null>(null)
   const canvasSize = FLOORPLAN_CANVAS_SIZE
+  const mapOuterRef = useRef<HTMLDivElement>(null)
+  const [mapScale, setMapScale] = useState(1)
+
+  useEffect(() => {
+    const el = mapOuterRef.current
+    if (!el) return
+    const ro = new ResizeObserver(([entry]) => {
+      setMapScale(Math.min(1, entry.contentRect.width / canvasSize))
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [canvasSize])
 
   // Fetch deployed plan
   useEffect(() => {
@@ -355,15 +367,35 @@ export default function MapPage() {
           width: '100%',
           margin: '0 auto',
         }}>
-          <FloorPlanCanvas
-            canvasSize={canvasSize}
-            zones={renderedZones}
-            walls={renderedWalls}
-            markers={renderedMarkers}
-            selected={selectedZone ? { id: selectedZone.id, kind: 'zone' } : null}
-            onZoneClick={zone => setSelectedZone(zone)}
-            style={{ width: canvasSize, height: canvasSize, flexShrink: 0 }}
-          />
+          {/* Scaling wrapper: shrinks canvas on mobile, 1:1 on desktop */}
+          <div ref={mapOuterRef} style={{ width: '100%' }}>
+            <div style={{
+              width: canvasSize * mapScale,
+              height: canvasSize * mapScale,
+              margin: '0 auto',
+              position: 'relative',
+              overflow: 'hidden',
+            }}>
+              <div style={{
+                width: canvasSize,
+                height: canvasSize,
+                transform: `scale(${mapScale})`,
+                transformOrigin: 'top left',
+                position: 'absolute',
+                top: 0,
+                left: 0,
+              }}>
+                <FloorPlanCanvas
+                  canvasSize={canvasSize}
+                  zones={renderedZones}
+                  walls={renderedWalls}
+                  markers={renderedMarkers}
+                  selected={selectedZone ? { id: selectedZone.id, kind: 'zone' } : null}
+                  onZoneClick={zone => setSelectedZone(zone)}
+                />
+              </div>
+            </div>
+          </div>
           <p style={{ fontSize: 13, color: 'var(--fp-text-muted)', margin: 0 }}>
             Tap a shelf section to see what items are currently in that area.
           </p>
@@ -386,7 +418,7 @@ export default function MapPage() {
 
           {/* Legend — compact horizontal grid below canvas */}
           <HexPanel
-            style={{ width: canvasSize }}
+            style={{ width: '100%', maxWidth: canvasSize }}
             fill="#ffffff"
             contentStyle={{ padding: '18px 22px' }}
           >

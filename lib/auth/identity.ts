@@ -169,6 +169,19 @@ export async function resolveIdentityForLogin(
     };
   }
 
+  if (loginDomain === "gmail.com") {
+    return {
+      ok: true,
+      identity: {
+        uid,
+        email: normalizedEmail,
+        role: "student",
+        hubDomain: "gmail.com",
+        displayName: readString(input.displayName) || null,
+      },
+    };
+  }
+
   if (!adminDomains.size) {
     return {
       ok: false,
