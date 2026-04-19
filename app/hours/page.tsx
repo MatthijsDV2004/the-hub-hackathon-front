@@ -1,10 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import HexPanel from "../components/HexPanel";
 
-const weeklyHours = [
+const defaultWeeklyHours = [
   { day: "Monday",    hours: "9:00 AM - 5:00 PM" },
   { day: "Tuesday",   hours: "9:00 AM - 5:00 PM" },
   { day: "Wednesday", hours: "9:00 AM - 6:00 PM" },
@@ -14,14 +14,128 @@ const weeklyHours = [
   { day: "Sunday",    hours: "Closed" },
 ];
 
-const hubLocation = "Building 12, Room 152";
+const defaultHubName = "The Hub";
+const defaultHubDescription = "Check open hours and avoid peak congestion windows.";
+const defaultHubLocation = "Building 12, Room 152";
 const hubEmail    = "ottercare@csumb.edu";
 
 const navLink = { padding: "8px 14px", borderRadius: 10, border: "1px solid var(--fp-panel-border)", color: "var(--fp-text-secondary)", fontSize: 13, fontWeight: 600, textDecoration: "none", background: "var(--fp-input-bg)" } as React.CSSProperties;
 
+type WeeklyHourEntry = {
+  day: string;
+  hours: string;
+};
+
+type HubInfoPayload = {
+  id: string;
+  name: string;
+  description: string | null;
+  location: string | null;
+  hoursOfOperation: string;
+};
+
+async function readApiPayload(response: Response): Promise<{
+  json: Record<string, unknown> | null;
+  text: string;
+}> {
+  const rawText = await response.text();
+
+  if (!rawText) {
+    return { json: null, text: "" };
+  }
+
+  try {
+    const parsed = JSON.parse(rawText) as Record<string, unknown>;
+    return { json: parsed, text: rawText };
+  } catch {
+    return { json: null, text: rawText };
+  }
+}
+
+function normalizeWeeklyHours(value: unknown): WeeklyHourEntry[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return null;
+      }
+
+      const row = entry as Record<string, unknown>;
+      const day = typeof row.day === "string" ? row.day.trim() : "";
+      const hours = typeof row.hours === "string" ? row.hours.trim() : "";
+
+      if (!day || !hours) {
+        return null;
+      }
+
+      return { day, hours };
+    })
+    .filter((entry): entry is WeeklyHourEntry => entry !== null);
+}
+
 export default function HoursPage() {
+  const [hubName, setHubName] = useState(defaultHubName);
+  const [hubDescription, setHubDescription] = useState(defaultHubDescription);
+  const [hubLocation, setHubLocation] = useState(defaultHubLocation);
+  const [weeklyHours, setWeeklyHours] = useState<WeeklyHourEntry[]>(defaultWeeklyHours);
+  const [error, setError] = useState("");
+
+  const loadHubInfo = useCallback(async () => {
+    setError("");
+
+    try {
+      const response = await fetch("/api/dataconnect/hub-info", { method: "GET" });
+      const { json, text } = await readApiPayload(response);
+
+      const payload = (json || {}) as { hub?: HubInfoPayload | null; error?: string };
+
+      if (!response.ok) {
+        const details =
+          payload.error ||
+          (text.trim().startsWith("<!DOCTYPE")
+            ? "Received HTML instead of JSON from hub API."
+            : text.slice(0, 160));
+
+        throw new Error(details || `Failed to load HubInfo (${response.status}).`);
+      }
+
+      if (!payload.hub) {
+        setHubName(defaultHubName);
+        setHubDescription(defaultHubDescription);
+        setHubLocation(defaultHubLocation);
+        setWeeklyHours(defaultWeeklyHours);
+        return;
+      }
+
+      setHubName(payload.hub.name || defaultHubName);
+      setHubDescription(payload.hub.description || defaultHubDescription);
+      setHubLocation(payload.hub.location || defaultHubLocation);
+
+      try {
+        const parsedHours = JSON.parse(payload.hub.hoursOfOperation);
+        const normalizedHours = normalizeWeeklyHours(parsedHours);
+        setWeeklyHours(normalizedHours.length ? normalizedHours : defaultWeeklyHours);
+      } catch {
+        setWeeklyHours(defaultWeeklyHours);
+      }
+    } catch (loadError) {
+      setError(
+        loadError instanceof Error
+          ? loadError.message
+          : "Could not load HubInfo right now."
+      );
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadHubInfo();
+  }, [loadHubInfo]);
+
   const currentDay = useMemo(() => new Intl.DateTimeFormat("en-US", { weekday: "long" }).format(new Date()), []);
-  const todayHours = useMemo(() => weeklyHours.find(e => e.day === currentDay)?.hours ?? "Unavailable", [currentDay]);
+  const todayHours = useMemo(() => weeklyHours.find(e => e.day === currentDay)?.hours ?? "Unavailable", [currentDay, weeklyHours]);
 
   return (
     <div style={{ minHeight: "100dvh", background: "var(--fp-page-bg)", padding: "32px 24px", boxSizing: "border-box" }}>
@@ -29,15 +143,23 @@ export default function HoursPage() {
 
         <HexPanel contentStyle={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 16, padding: "20px 24px" }}>
           <div>
-            <p style={{ fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.14em", color: "var(--fp-text-muted)", margin: "0 0 4px" }}>The Hub</p>
+            <p style={{ fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.14em", color: "var(--fp-text-muted)", margin: "0 0 4px" }}>{hubName}</p>
             <h1 style={{ color: "var(--fp-text-primary)", fontSize: "clamp(22px, 5vw, 32px)", fontWeight: 800, margin: "0 0 4px" }}>Hours of Operation</h1>
-            <p style={{ color: "var(--fp-text-secondary)", fontSize: 14, margin: 0 }}>Check open hours and avoid peak congestion windows.</p>
+            <p style={{ color: "var(--fp-text-secondary)", fontSize: 14, margin: 0 }}>{hubDescription}</p>
           </div>
           <nav style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
             <Link href="/" style={navLink}>Home</Link>
             <Link href="/admin/hours" style={navLink}>Admin Hours</Link>
           </nav>
         </HexPanel>
+
+        {error ? (
+          <HexPanel fill="rgba(180,30,30,0.10)" contentStyle={{ padding: "14px 16px" }}>
+            <p style={{ margin: 0, color: "#f87171", fontSize: 13, fontWeight: 600 }}>
+              {error}
+            </p>
+          </HexPanel>
+        ) : null}
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 20 }}>
           {/* Location & today */}
