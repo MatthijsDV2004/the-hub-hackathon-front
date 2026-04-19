@@ -5,6 +5,7 @@ import Link from "next/link";
 import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
 
 import LoadingAnimation from "@/components/LoadingAnimation";
+import HexPanel from "../components/HexPanel";
 
 type AnalyzeResponse = {
   text?: string;
@@ -407,30 +408,25 @@ export default function CheckoutPage() {
     }
   };
 
+  const navLink = { padding: "8px 14px", borderRadius: 10, border: "1px solid var(--fp-panel-border)", color: "var(--fp-text-secondary)", fontSize: 13, fontWeight: 600, textDecoration: "none", background: "var(--fp-input-bg)" } as React.CSSProperties;
+
   return (
-    <div className="min-h-screen bg-slate-100 px-4 py-8 text-slate-900 md:px-8">
-      <main className="mx-auto w-full max-w-6xl rounded-2xl border border-slate-200 bg-white p-5 shadow-sm md:p-8">
-        <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+    <div style={{ minHeight: "100dvh", background: "var(--fp-page-bg)", padding: "32px 24px", boxSizing: "border-box" }}>
+      <div style={{ maxWidth: 1200, margin: "0 auto", display: "flex", flexDirection: "column", gap: 20 }}>
+
+        <HexPanel contentStyle={{ padding: "20px 24px", display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 14 }}>
           <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-              Admin Checkout
-            </p>
-            <h1 className="mt-1 text-2xl font-semibold tracking-tight text-slate-900 md:text-3xl">
-              Minimal Item Checkout
-            </h1>
+            <p style={{ fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.14em", color: "var(--fp-text-muted)", margin: "0 0 4px" }}>Admin Checkout</p>
+            <h1 style={{ color: "var(--fp-text-primary)", fontSize: "clamp(22px, 5vw, 30px)", fontWeight: 800, margin: "0 0 4px" }}>Minimal Item Checkout</h1>
+            <p style={{ color: "var(--fp-text-secondary)", fontSize: 14, margin: 0 }}>Upload one checkout photo, detect selected items, and decrement inventory.</p>
           </div>
-          <Link
-            href="/"
-            className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
-          >
-            Back to Homepage
-          </Link>
-        </div>
+          <nav style={{ display: "flex", gap: 8 }}>
+            <Link href="/admin" style={navLink}>Admin Dashboard</Link>
+            <Link href="/" style={navLink}>Home</Link>
+          </nav>
+        </HexPanel>
 
-        <p className="mb-6 max-w-4xl text-sm text-slate-600 md:text-base">
-          Minimal workflow: upload one checkout photo, detect selected items, and decrement inventory.
-        </p>
-
+        <HexPanel fill="var(--fp-surface-secondary)" contentStyle={{ padding: "20px 24px" }}>
         <form className="grid gap-6 xl:grid-cols-[1fr_1.1fr]" onSubmit={onProcessCheckout}>
           <section className="space-y-4 rounded-xl border border-slate-200 bg-white p-4">
             <label className="block text-sm font-semibold text-slate-700">
@@ -689,7 +685,8 @@ export default function CheckoutPage() {
             </ul>
           </section>
         ) : null}
-      </main>
+        </HexPanel>
+      </div>
     </div>
   );
 }

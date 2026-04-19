@@ -1,35 +1,65 @@
 import Link from "next/link";
+import HexPanel from "../components/HexPanel";
+
+const events = [
+  { name: "Fresh Produce Pop-Up", start: "Tuesday 1:00 PM", end: "Tuesday 3:00 PM", seats: "30" },
+  { name: "Protein Pantry Refill", start: "Thursday 11:30 AM", end: "Thursday 1:30 PM", seats: "40" },
+  { name: "Weekend Grab-and-Go", start: "Friday 4:00 PM", end: "Friday 6:00 PM", seats: "50" },
+];
+
+const navLink = { padding: "8px 14px", borderRadius: 10, border: "1px solid var(--fp-panel-border)", color: "var(--fp-text-secondary)", fontSize: 13, fontWeight: 600, textDecoration: "none", background: "var(--fp-input-bg)" } as React.CSSProperties;
 
 export default function CheckinPage() {
   return (
-    <div className="min-h-screen bg-slate-950 px-4 py-8 text-slate-100 md:px-8">
-      <main className="mx-auto w-full max-w-3xl rounded-3xl border border-white/10 bg-slate-900/50 p-5 shadow-2xl md:p-8">
-        <p className="inline-flex rounded-full border border-lime-300/40 bg-lime-300/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-lime-100">
-          Student Queue
-        </p>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight text-white md:text-4xl">
-          Peak-Hour Check-In
-        </h1>
-        <p className="mt-3 text-sm text-slate-300 md:text-base">
-          Students can join a queue for major Hub events so line management stays predictable during
-          high-traffic windows.
-        </p>
+    <div style={{ minHeight: "100dvh", background: "var(--fp-page-bg)", padding: "32px 24px", boxSizing: "border-box" }}>
+      <div style={{ maxWidth: 700, margin: "0 auto", display: "flex", flexDirection: "column", gap: 20 }}>
 
-        <div className="mt-5 space-y-2 rounded-xl border border-white/10 bg-slate-950/45 p-4 text-sm text-slate-200">
-          <p>1. Select event timeslot.</p>
-          <p>2. Confirm student ID and expected pickup window.</p>
-          <p>3. Receive queue position and estimated wait time.</p>
-        </div>
+        <HexPanel contentStyle={{ padding: "20px 24px", display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 14 }}>
+          <div>
+            <p style={{ fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.14em", color: "var(--fp-text-muted)", margin: "0 0 4px" }}>Student Queue</p>
+            <h1 style={{ color: "var(--fp-text-primary)", fontSize: "clamp(22px, 5vw, 30px)", fontWeight: 800, margin: "0 0 4px" }}>Peak-Hour Check-In</h1>
+            <p style={{ color: "var(--fp-text-secondary)", fontSize: 14, margin: 0 }}>Join a queue for major Hub events so line management stays predictable.</p>
+          </div>
+          <nav style={{ display: "flex", gap: 8 }}>
+            <Link href="/events" style={navLink}>Events</Link>
+            <Link href="/" style={navLink}>Home</Link>
+          </nav>
+        </HexPanel>
 
-        <div className="mt-5 flex flex-wrap gap-2 text-xs">
-          <Link href="/events" className="rounded-lg border border-white/15 px-3 py-1.5 text-slate-200 hover:border-lime-300/60">
-            Back to Events
-          </Link>
-          <Link href="/" className="rounded-lg border border-white/15 px-3 py-1.5 text-slate-200 hover:border-lime-300/60">
-            Home
-          </Link>
-        </div>
-      </main>
+        {/* Step 1 — Select timeslot */}
+        <HexPanel fill="var(--fp-surface-secondary)" contentStyle={{ padding: "20px 24px" }}>
+          <p style={{ fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--fp-text-muted)", margin: "0 0 14px" }}>1 — Select a timeslot</p>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {events.map(event => (
+              <div key={event.name} style={{ padding: "12px 16px", borderRadius: 10, border: "1px solid var(--fp-input-border)", background: "var(--fp-input-bg)", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                <div>
+                  <p style={{ color: "var(--fp-text-primary)", fontSize: 14, fontWeight: 700, margin: "0 0 2px" }}>{event.name}</p>
+                  <p style={{ color: "var(--fp-text-muted)", fontSize: 12, margin: 0 }}>{event.start} – {event.end}</p>
+                </div>
+                <span style={{ color: "var(--fp-button-accent)", fontSize: 12, fontWeight: 700 }}>{event.seats} seats</span>
+              </div>
+            ))}
+          </div>
+        </HexPanel>
+
+        {/* Step 2 — Student ID */}
+        <HexPanel fill="var(--fp-surface-secondary)" contentStyle={{ padding: "20px 24px" }}>
+          <p style={{ fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--fp-text-muted)", margin: "0 0 14px" }}>2 — Confirm student ID</p>
+          <input
+            type="text"
+            placeholder="Enter your student ID…"
+            disabled
+            style={{ width: "100%", boxSizing: "border-box", padding: "12px 14px", borderRadius: 10, border: "1px solid var(--fp-input-border)", background: "var(--fp-input-bg)", color: "var(--fp-text-muted)", fontSize: 15, cursor: "not-allowed" }}
+          />
+        </HexPanel>
+
+        {/* Coming soon */}
+        <HexPanel fill="var(--fp-surface-accent)" contentStyle={{ padding: "18px 24px", textAlign: "center" }}>
+          <p style={{ fontSize: 14, fontWeight: 700, color: "var(--fp-button-accent)", margin: "0 0 4px" }}>Queue system coming soon</p>
+          <p style={{ fontSize: 13, color: "var(--fp-text-muted)", margin: 0 }}>Step 3 — Receive your queue position and estimated wait time once this feature is live.</p>
+        </HexPanel>
+
+      </div>
     </div>
   );
 }

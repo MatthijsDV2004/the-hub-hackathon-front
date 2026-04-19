@@ -4,6 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import LoadingAnimation from "@/components/LoadingAnimation";
+import HexPanel from "../../components/HexPanel";
 
 type ShelfSummary = {
   id: string;
@@ -496,89 +497,66 @@ export default function StudentInventoryPage() {
     setZoomLevel(1.8);
   };
 
+  const navLink = { padding: "8px 14px", borderRadius: 10, border: "1px solid var(--fp-panel-border)", color: "var(--fp-text-secondary)", fontSize: 13, fontWeight: 600, textDecoration: "none", background: "var(--fp-input-bg)" } as React.CSSProperties;
+
   return (
-    <div className="min-h-screen bg-stone-50 px-4 py-8 text-slate-900 md:px-8">
-      <main className="mx-auto w-full max-w-6xl space-y-5">
-        <header className="flex flex-wrap items-center justify-between gap-3">
+    <div style={{ minHeight: "100dvh", background: "var(--fp-page-bg)", padding: "32px 24px", boxSizing: "border-box" }}>
+      <div style={{ maxWidth: 1400, margin: "0 auto", display: "flex", flexDirection: "column", gap: 20 }}>
+        <HexPanel contentStyle={{ padding: "20px 24px", display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 14 }}>
           <div>
-            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-              Student · Pantry
-            </p>
-            <h1 className="mt-1 text-2xl font-semibold tracking-tight text-slate-900 md:text-3xl">
-              Available Inventory
-            </h1>
-            <p className="mt-1 text-sm text-slate-600">
-              Browse what&rsquo;s on the shelves right now and claim an item.
-            </p>
+            <p style={{ fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.14em", color: "var(--fp-text-muted)", margin: "0 0 4px" }}>Student · Pantry</p>
+            <h1 style={{ color: "var(--fp-text-primary)", fontSize: "clamp(22px, 5vw, 30px)", fontWeight: 800, margin: "0 0 4px" }}>Available Inventory</h1>
+            <p style={{ color: "var(--fp-text-secondary)", fontSize: 14, margin: 0 }}>Browse what&rsquo;s on the shelves right now and claim an item.</p>
           </div>
-          <nav className="flex flex-wrap gap-2">
-            <Link
-              href="/"
-              className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
-            >
-              Home
-            </Link>
-            <Link
-              href="/hours"
-              className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
-            >
-              Hours
-            </Link>
-            <Link
-              href="/events"
-              className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
-            >
-              Events
-            </Link>
-            <Link
-              href="/login"
-              className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
-            >
-              Login
-            </Link>
+          <nav style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            <Link href="/" style={navLink}>Home</Link>
+            <Link href="/hours" style={navLink}>Hours</Link>
+            <Link href="/events" style={navLink}>Events</Link>
+            <Link href="/login" style={navLink}>Login</Link>
           </nav>
-        </header>
+        </HexPanel>
+        <div className="space-y-5">
 
         {error ? (
-          <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+          <div style={{ padding: "12px 16px", borderRadius: 10, border: "1px solid rgba(220,38,38,0.4)", background: "rgba(220,38,38,0.08)", color: "#fca5a5", fontSize: 13 }}>
             {error}
-          </p>
+          </div>
         ) : null}
 
         {claimError ? (
-          <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+          <div style={{ padding: "12px 16px", borderRadius: 10, border: "1px solid rgba(220,38,38,0.4)", background: "rgba(220,38,38,0.08)", color: "#fca5a5", fontSize: 13 }}>
             {claimError}
-          </p>
+          </div>
         ) : null}
 
         {claimStatus ? (
-          <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+          <div style={{ padding: "12px 16px", borderRadius: 10, border: "1px solid rgba(104,148,102,0.4)", background: "rgba(104,148,102,0.08)", color: "#86efac", fontSize: 13 }}>
             {claimStatus}
-          </p>
+          </div>
         ) : null}
 
-        <section className="space-y-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <label className="block text-sm font-medium text-slate-700">
+        <HexPanel fill="var(--fp-surface-secondary)" contentStyle={{ padding: "16px 20px", display: "flex", flexDirection: "column", gap: 12 }}>
+          <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "var(--fp-text-secondary)" }}>
             Search
             <input
               type="search"
               value={searchTerm}
               onChange={(event) => setSearchTerm(event.target.value)}
               placeholder="Search by product, brand, type, size..."
-              className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-500/20"
+              style={{ marginTop: 6, width: "100%", boxSizing: "border-box", padding: "10px 14px", borderRadius: 10, border: "1px solid var(--fp-input-border)", background: "var(--fp-input-bg)", color: "var(--fp-text-primary)", fontSize: 14, outline: "none" }}
             />
           </label>
 
-          <div className="flex flex-wrap items-center justify-between gap-3">
+          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
             <div>
-              <p className="text-sm text-slate-700">
+              <p style={{ fontSize: 13, color: "var(--fp-text-secondary)", margin: "0 0 2px" }}>
                 {isLoading
                   ? "Loading latest inventory..."
                   : `${inventorySummary.totalItems} item${inventorySummary.totalItems === 1 ? "" : "s"}${
                       searchTerm.trim() ? ` for "${searchTerm.trim()}"` : ""
                     }`}
               </p>
-              <p className="text-xs text-slate-500">
+              <p style={{ fontSize: 11, color: "var(--fp-text-muted)", margin: 0 }}>
                 {inventorySummary.totalUnits} unit{inventorySummary.totalUnits === 1 ? "" : "s"} available
                 {inventorySummary.missingLocation
                   ? ` · ${inventorySummary.missingLocation} without per-item coordinates`
@@ -589,12 +567,12 @@ export default function StudentInventoryPage() {
               type="button"
               onClick={() => void loadInventory()}
               disabled={isLoading}
-              className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+              style={{ padding: "8px 16px", borderRadius: 10, border: "1px solid var(--fp-input-border)", background: "var(--fp-input-bg)", color: "var(--fp-text-secondary)", fontSize: 13, fontWeight: 600, cursor: isLoading ? "not-allowed" : "pointer", opacity: isLoading ? 0.6 : 1 }}
             >
               Refresh
             </button>
           </div>
-        </section>
+        </HexPanel>
 
         {filteredItems.length ? (
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
@@ -629,10 +607,11 @@ export default function StudentInventoryPage() {
               return (
                 <article
                   key={item.id}
-                  className="flex flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm transition hover:shadow-md"
+                  className="flex flex-col overflow-hidden rounded-2xl border shadow-sm transition hover:shadow-md"
+                  style={{ borderColor: "var(--fp-panel-border)", background: "var(--fp-surface-secondary)" }}
                 >
-                  <div className="relative flex h-40 items-center justify-center border-b border-slate-200 bg-stone-50 p-2">
-                    <span className="absolute left-2 top-2 rounded-full border border-slate-200 bg-white/90 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-600">
+                  <div className="relative flex h-40 items-center justify-center p-2" style={{ borderBottom: "1px solid var(--fp-panel-border)", background: "var(--fp-surface-primary)" }}>
+                    <span className="absolute left-2 top-2 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide" style={{ border: "1px solid var(--fp-input-border)", background: "var(--fp-input-bg)", color: "var(--fp-text-muted)" }}>
                       {displayType}
                     </span>
                     <span
@@ -672,15 +651,15 @@ export default function StudentInventoryPage() {
                   </div>
 
                   <div className="flex flex-1 flex-col gap-1 p-3">
-                    <h2 className="line-clamp-2 min-h-10 text-sm font-semibold leading-5 text-slate-900">
+                    <h2 className="line-clamp-2 min-h-10 text-sm font-semibold leading-5" style={{ color: "var(--fp-text-primary)" }}>
                       {productTitle}
                     </h2>
-                    <p className="text-xs text-slate-600">{item.size || "Size not listed"}</p>
-                    <p className="text-xs font-medium text-slate-700">
+                    <p className="text-xs" style={{ color: "var(--fp-text-muted)" }}>{item.size || "Size not listed"}</p>
+                    <p className="text-xs font-medium" style={{ color: "var(--fp-text-secondary)" }}>
                       Qty: {item.quantity}
                       {isOutOfStock ? " · Out of stock" : ""}
                     </p>
-                    <p className="text-[10px] text-slate-400">
+                    <p className="text-[10px]" style={{ color: "var(--fp-text-muted)" }}>
                       Updated {formatTimestamp(item.updatedAt)}
                     </p>
 
@@ -688,7 +667,7 @@ export default function StudentInventoryPage() {
                       type="button"
                       disabled={isOutOfStock || isClaimingThisItem}
                       onClick={() => void onClaimItem(item.id)}
-                      className="mt-auto inline-flex w-full items-center justify-center rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                      style={{ marginTop: "auto", width: "100%", padding: "8px 12px", borderRadius: 8, border: "none", background: isOutOfStock ? "var(--fp-input-bg)" : "var(--fp-button-accent)", color: "white", fontSize: 13, fontWeight: 700, cursor: isOutOfStock || isClaimingThisItem ? "not-allowed" : "pointer", opacity: isOutOfStock || isClaimingThisItem ? 0.6 : 1 }}
                     >
                       {isClaimingThisItem ? "Claiming..." : isOutOfStock ? "Unavailable" : "Claim"}
                     </button>
@@ -698,19 +677,19 @@ export default function StudentInventoryPage() {
             })}
           </div>
         ) : (
-          <div className="rounded-2xl border border-slate-200 bg-white px-4 py-10 text-center shadow-sm">
+          <div style={{ borderRadius: 16, border: "1px solid var(--fp-panel-border)", background: "var(--fp-surface-secondary)", padding: "40px 16px", textAlign: "center" }}>
             {isLoading ? (
               <LoadingAnimation
                 message="Loading latest inventory..."
                 className="py-2"
                 iconClassName="h-20 w-20"
-                messageClassName="mt-2 text-sm font-medium text-slate-600"
+                messageClassName="mt-2 text-sm font-medium text-slate-300"
               />
             ) : (
-              <p className="text-base font-medium text-slate-800">No items match your search.</p>
+              <p style={{ fontSize: 15, fontWeight: 600, color: "var(--fp-text-primary)" }}>No items match your search.</p>
             )}
             {!isLoading ? (
-              <p className="mt-1 text-sm text-slate-500">
+              <p style={{ marginTop: 4, fontSize: 13, color: "var(--fp-text-muted)" }}>
                 Try searching for chips, cereal, pasta, or clearing the search box.
               </p>
             ) : null}
@@ -732,14 +711,14 @@ export default function StudentInventoryPage() {
           const autoFocused = modalUsesServerCrop || Boolean(effectiveLocation(zoomItem));
 
           return (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 px-4 py-6">
-            <div className="w-full max-w-4xl rounded-2xl border border-slate-200 bg-white p-4 shadow-2xl">
+          <div className="fixed inset-0 z-50 flex items-center justify-center px-4 py-6" style={{ background: "rgba(10,18,30,0.85)" }}>
+            <div className="w-full max-w-4xl rounded-2xl p-4 shadow-2xl" style={{ border: "1px solid var(--fp-panel-border)", background: "var(--fp-surface-primary)" }}>
               <div className="mb-3 flex items-center justify-between gap-3">
                 <div>
-                  <p className="text-sm font-semibold text-slate-900">
+                  <p style={{ fontSize: 14, fontWeight: 700, color: "var(--fp-text-primary)", margin: 0 }}>
                     {buildDisplayProductTitle(zoomItem)}
                   </p>
-                  <p className="text-xs text-slate-500">
+                  <p style={{ fontSize: 11, color: "var(--fp-text-muted)", margin: 0 }}>
                     {autoFocused
                       ? "Auto-focused on the item. Use the slider to zoom further."
                       : "Showing the product photo. Use the slider to zoom in."}
@@ -748,13 +727,13 @@ export default function StudentInventoryPage() {
                 <button
                   type="button"
                   onClick={closeZoomModal}
-                  className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+                  style={{ padding: "8px 16px", borderRadius: 8, border: "1px solid var(--fp-input-border)", background: "var(--fp-input-bg)", color: "var(--fp-text-secondary)", fontSize: 13, fontWeight: 600, cursor: "pointer" }}
                 >
                   Close
                 </button>
               </div>
 
-              <div className="relative h-[68vh] overflow-hidden rounded-xl border border-slate-200 bg-stone-50 p-4">
+              <div className="relative h-[68vh] overflow-hidden rounded-xl p-4" style={{ border: "1px solid var(--fp-panel-border)", background: "var(--fp-surface-secondary)" }}>
                 <Image
                   src={modalSrc}
                   alt={`${buildDisplayProductTitle(zoomItem)} zoomed photo`}
@@ -767,7 +746,7 @@ export default function StudentInventoryPage() {
               </div>
 
               <div className="mt-3 flex flex-wrap items-center gap-3">
-                <label className="flex flex-1 items-center gap-3 text-xs font-medium text-slate-700">
+                <label style={{ display: "flex", flex: 1, alignItems: "center", gap: 12, fontSize: 12, fontWeight: 600, color: "var(--fp-text-secondary)" }}>
                   Zoom
                   <input
                     type="range"
@@ -776,16 +755,16 @@ export default function StudentInventoryPage() {
                     step={0.05}
                     value={zoomLevel}
                     onChange={(event) => setZoomLevel(Number(event.target.value))}
-                    className="w-full"
+                    style={{ flex: 1 }}
                   />
                 </label>
-                <span className="w-14 rounded-md border border-slate-300 bg-stone-50 px-2 py-1 text-center text-xs text-slate-700">
+                <span style={{ width: 56, borderRadius: 6, border: "1px solid var(--fp-input-border)", background: "var(--fp-input-bg)", padding: "4px 8px", textAlign: "center", fontSize: 11, color: "var(--fp-text-secondary)" }}>
                   {zoomLevel.toFixed(2)}x
                 </span>
                 <button
                   type="button"
                   onClick={() => setZoomLevel(initialZoomLevelFor(zoomItem))}
-                  className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-100"
+                  style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid var(--fp-input-border)", background: "var(--fp-input-bg)", color: "var(--fp-text-secondary)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}
                 >
                   Reset
                 </button>
@@ -795,8 +774,9 @@ export default function StudentInventoryPage() {
           );
         })() : null}
 
-        <p className="text-xs text-slate-500">Live data source: /api/dataconnect/inventory-items</p>
-      </main>
+        <p style={{ fontSize: 11, color: "var(--fp-text-muted)" }}>Live data source: /api/dataconnect/inventory-items</p>
+        </div>
+      </div>
     </div>
   );
 }

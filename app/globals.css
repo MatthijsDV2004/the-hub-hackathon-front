@@ -3,29 +3,7 @@
 :root {
   --background: #ffffff;
   --foreground: #171717;
-}
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: var(--font-geist-sans), sans-serif;
-}
-
-.theme-floorplan-admin {
   --fp-page-bg: #0f1825;
   --fp-surface-primary: linear-gradient(180deg, #162741 0%, #121f33 100%);
   --fp-surface-secondary: linear-gradient(180deg, #0f1928 0%, #0c1520 100%);
@@ -49,4 +27,17 @@ body {
   --fp-button-accent: #6b92b6;
   --fp-success: #689466;
   --fp-danger: #dc2626;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--fp-page-bg);
+  color: var(--fp-text-primary);
+  font-family: var(--font-geist-sans), sans-serif;
 }

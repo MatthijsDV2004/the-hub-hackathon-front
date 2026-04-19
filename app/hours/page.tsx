@@ -2,119 +2,87 @@
 
 import Link from "next/link";
 import { useMemo } from "react";
+import HexPanel from "../components/HexPanel";
 
 const weeklyHours = [
-  { day: "Monday", hours: "9:00 AM - 5:00 PM" },
-  { day: "Tuesday", hours: "9:00 AM - 5:00 PM" },
+  { day: "Monday",    hours: "9:00 AM - 5:00 PM" },
+  { day: "Tuesday",   hours: "9:00 AM - 5:00 PM" },
   { day: "Wednesday", hours: "9:00 AM - 6:00 PM" },
-  { day: "Thursday", hours: "9:00 AM - 5:00 PM" },
-  { day: "Friday", hours: "9:00 AM - 3:00 PM" },
-  { day: "Saturday", hours: "Closed" },
-  { day: "Sunday", hours: "Closed" },
+  { day: "Thursday",  hours: "9:00 AM - 5:00 PM" },
+  { day: "Friday",    hours: "9:00 AM - 3:00 PM" },
+  { day: "Saturday",  hours: "Closed" },
+  { day: "Sunday",    hours: "Closed" },
 ];
 
 const hubLocation = "Building 12, Room 152";
-const hubEmail = "ottercare@csumb.edu";
+const hubEmail    = "ottercare@csumb.edu";
+
+const navLink = { padding: "8px 14px", borderRadius: 10, border: "1px solid var(--fp-panel-border)", color: "var(--fp-text-secondary)", fontSize: 13, fontWeight: 600, textDecoration: "none", background: "var(--fp-input-bg)" } as React.CSSProperties;
 
 export default function HoursPage() {
-  const currentDay = useMemo(() => {
-    return new Intl.DateTimeFormat("en-US", { weekday: "long" }).format(new Date());
-  }, []);
-
-  const todayHours = useMemo(() => {
-    return weeklyHours.find((entry) => entry.day === currentDay)?.hours ?? "Unavailable";
-  }, [currentDay]);
+  const currentDay = useMemo(() => new Intl.DateTimeFormat("en-US", { weekday: "long" }).format(new Date()), []);
+  const todayHours = useMemo(() => weeklyHours.find(e => e.day === currentDay)?.hours ?? "Unavailable", [currentDay]);
 
   return (
-    <div className="min-h-screen bg-[#F8F6F2] px-4 py-8 text-[#243B53] md:px-8">
-      <main className="mx-auto w-full max-w-5xl rounded-3xl border border-[#1D4ED8]/10 bg-white p-5 shadow-[0_18px_50px_rgba(36,59,83,0.08)] md:p-8">
+    <div style={{ minHeight: "100dvh", background: "var(--fp-page-bg)", padding: "32px 24px", boxSizing: "border-box" }}>
+      <div style={{ maxWidth: 900, margin: "0 auto", display: "flex", flexDirection: "column", gap: 20 }}>
 
-        <h1 className="mt-3 text-3xl font-semibold leading-tight text-[#123B7A] md:text-5xl">
-          Hours of Operation
-        </h1>
-
-        <p className="mt-3 max-w-2xl text-sm leading-6 text-[#486581] md:text-base">
-          Students can check open hours and avoid peak congestion windows.
-        </p>
-
-        <section className="mt-6 grid gap-6 lg:grid-cols-[1.15fr_0.95fr]">
-          <div className="rounded-2xl border border-[#1D4ED8]/10 bg-[#FCFDFF] p-5">
-            <p className="text-sm font-medium text-[#486581]">Location</p>
-            <p className="mt-1 text-lg font-semibold text-[#123B7A]">{hubLocation}</p>
-
-            <p className="mt-5 text-sm font-medium text-[#486581]">Contact</p>
-            <p
-              className="mt-1 inline-block text-lg font-semibold text-[#1D4ED8] hover:underline"
-            >
-              {hubEmail}
-            </p>
-
-            <div className="mt-6 rounded-2xl border border-[#D4A62A]/25 bg-[#FFF9EA] p-4">
-              <p className="text-sm font-medium text-[#9A6B00]">Today</p>
-              <p className="mt-1 text-xl font-semibold text-[#123B7A]">
-                {currentDay}
-              </p>
-              <p className="mt-1 text-base text-[#243B53]">{todayHours}</p>
-            </div>
+        <HexPanel contentStyle={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 16, padding: "20px 24px" }}>
+          <div>
+            <p style={{ fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.14em", color: "var(--fp-text-muted)", margin: "0 0 4px" }}>The Hub</p>
+            <h1 style={{ color: "var(--fp-text-primary)", fontSize: "clamp(22px, 5vw, 32px)", fontWeight: 800, margin: "0 0 4px" }}>Hours of Operation</h1>
+            <p style={{ color: "var(--fp-text-secondary)", fontSize: 14, margin: 0 }}>Check open hours and avoid peak congestion windows.</p>
           </div>
+          <nav style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            <Link href="/" style={navLink}>Home</Link>
+            <Link href="/admin/hours" style={navLink}>Admin Hours</Link>
+          </nav>
+        </HexPanel>
 
-          <div className="rounded-2xl border border-[#1D4ED8]/10 bg-white p-5">
-            <div className="space-y-2">
-              {weeklyHours.map((entry) => {
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 20 }}>
+          {/* Location & today */}
+          <HexPanel fill="var(--fp-surface-secondary)" contentStyle={{ padding: "20px 24px", display: "flex", flexDirection: "column", gap: 14 }}>
+            <div>
+              <p style={{ fontSize: 12, fontWeight: 700, color: "var(--fp-text-muted)", margin: "0 0 4px" }}>Location</p>
+              <p style={{ fontSize: 16, fontWeight: 700, color: "var(--fp-text-primary)", margin: 0 }}>{hubLocation}</p>
+            </div>
+            <div>
+              <p style={{ fontSize: 12, fontWeight: 700, color: "var(--fp-text-muted)", margin: "0 0 4px" }}>Contact</p>
+              <p style={{ fontSize: 15, fontWeight: 700, color: "var(--fp-button-accent)", margin: 0 }}>{hubEmail}</p>
+            </div>
+            <HexPanel fill="var(--fp-surface-accent)" contentStyle={{ padding: "14px 16px" }}>
+              <p style={{ fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--fp-text-muted)", margin: "0 0 4px" }}>Today</p>
+              <p style={{ fontSize: 17, fontWeight: 800, color: "var(--fp-text-primary)", margin: "0 0 2px" }}>{currentDay}</p>
+              <p style={{ fontSize: 14, color: "var(--fp-text-secondary)", margin: 0 }}>{todayHours}</p>
+            </HexPanel>
+          </HexPanel>
+
+          {/* Weekly schedule */}
+          <HexPanel fill="var(--fp-surface-secondary)" contentStyle={{ padding: "20px 24px" }}>
+            <p style={{ fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--fp-text-muted)", margin: "0 0 12px" }}>Weekly Schedule</p>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {weeklyHours.map(entry => {
                 const isToday = entry.day === currentDay;
                 return (
-                  <div
-                    key={entry.day}
-                    className={`flex items-center justify-between rounded-xl border px-4 py-3 text-sm transition ${
-                      isToday
-                        ? "border-[#1D4ED8]/25 bg-[#EAF2FF] shadow-sm"
-                        : "border-[#1D4ED8]/10 bg-[#FCFDFF]"
-                    }`}
-                  >
-                    <div className="flex items-center gap-3">
-                      <span
-                        className={`font-semibold ${
-                          isToday ? "text-[#123B7A]" : "text-[#243B53]"
-                        }`}
-                      >
-                        {entry.day}
-                      </span>
-                      {isToday ? (
-                        <span className="rounded-full bg-[#123B7A] px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-white">
-                          Today
-                        </span>
-                      ) : null}
+                  <div key={entry.day} style={{
+                    display: "flex", justifyContent: "space-between", alignItems: "center",
+                    padding: "8px 12px", borderRadius: 8,
+                    background: isToday ? "rgba(61,90,138,0.4)" : "rgba(255,255,255,0.03)",
+                    border: isToday ? "1px solid var(--fp-panel-border)" : "1px solid transparent",
+                  }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ fontSize: 14, fontWeight: isToday ? 800 : 600, color: isToday ? "var(--fp-text-primary)" : "var(--fp-text-secondary)" }}>{entry.day}</span>
+                      {isToday && <span style={{ fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em", background: "var(--fp-panel-border)", color: "#fff", padding: "2px 7px", borderRadius: 20 }}>Today</span>}
                     </div>
-
-                    <span
-                      className={`font-medium ${
-                        isToday ? "text-[#123B7A]" : "text-[#486581]"
-                      }`}
-                    >
-                      {entry.hours}
-                    </span>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: isToday ? "var(--fp-text-primary)" : "var(--fp-text-muted)" }}>{entry.hours}</span>
                   </div>
                 );
               })}
             </div>
-          </div>
-        </section>
-
-        <div className="mt-6 flex flex-wrap gap-2 text-sm">
-          <Link
-            href="/"
-            className="rounded-lg border border-[#1D4ED8]/15 bg-white px-3 py-2 text-[#35507A] transition hover:border-[#1D4ED8]/40 hover:text-[#123B7A]"
-          >
-            Home
-          </Link>
-          <Link
-            href="/admin/hours"
-            className="rounded-lg border border-[#1D4ED8]/15 bg-white px-3 py-2 text-[#35507A] transition hover:border-[#1D4ED8]/40 hover:text-[#123B7A]"
-          >
-            Admin Hours Management
-          </Link>
+          </HexPanel>
         </div>
-      </main>
+
+      </div>
     </div>
   );
 }

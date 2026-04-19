@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import LoadingAnimation from "@/components/LoadingAnimation";
+import HexPanel from "../../components/HexPanel";
 
 type ShelfSummary = {
   id: string;
@@ -302,25 +303,28 @@ export default function AdminStockPage() {
     [isDeleting, items, loadInventory]
   );
 
-  return (
-    <div className="min-h-screen bg-slate-950 px-4 py-8 text-slate-100 md:px-8">
-      <main className="mx-auto w-full max-w-6xl rounded-3xl border border-white/10 bg-slate-900/50 p-5 shadow-2xl md:p-8">
-        <p className="inline-flex rounded-full border border-emerald-300/40 bg-emerald-300/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-emerald-100">
-          Admin Inventory
-        </p>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight text-white md:text-4xl">
-          Inventory Group Manager
-        </h1>
-        <p className="mt-3 text-sm text-slate-300 md:text-base">
-          Search inventory, jump to a shelf group, and delete single items, shelf groups, or all inventory.
-        </p>
-        <p className="mt-2 text-xs text-slate-400">
-          {isLoading
-            ? "Loading inventory..."
-            : `${summary.totalItems} items • ${summary.totalUnits} units shown`}
-        </p>
+  const navLink = { padding: "8px 14px", borderRadius: 10, border: "1px solid var(--fp-panel-border)", color: "var(--fp-text-secondary)", fontSize: 13, fontWeight: 600, textDecoration: "none", background: "var(--fp-input-bg)" } as React.CSSProperties;
 
-        <section className="mt-5 rounded-xl border border-white/10 bg-slate-950/45 p-4">
+  return (
+    <div style={{ minHeight: "100dvh", background: "var(--fp-page-bg)", padding: "32px 24px", boxSizing: "border-box" }}>
+      <div style={{ maxWidth: 1200, margin: "0 auto", display: "flex", flexDirection: "column", gap: 20 }}>
+
+        <HexPanel contentStyle={{ padding: "20px 24px", display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 14 }}>
+          <div>
+            <p style={{ fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.14em", color: "var(--fp-text-muted)", margin: "0 0 4px" }}>Admin Inventory</p>
+            <h1 style={{ color: "var(--fp-text-primary)", fontSize: "clamp(22px, 5vw, 30px)", fontWeight: 800, margin: "0 0 4px" }}>Inventory Group Manager</h1>
+            <p style={{ color: "var(--fp-text-secondary)", fontSize: 14, margin: "0 0 4px" }}>Search inventory, jump to a shelf group, and delete single items, shelf groups, or all inventory.</p>
+            <p style={{ color: "var(--fp-text-muted)", fontSize: 12, margin: 0 }}>
+              {isLoading ? "Loading inventory..." : `${summary.totalItems} items • ${summary.totalUnits} units shown`}
+            </p>
+          </div>
+          <nav style={{ display: "flex", gap: 8 }}>
+            <Link href="/admin" style={navLink}>Admin Dashboard</Link>
+            <Link href="/inventory" style={navLink}>AI Upload</Link>
+          </nav>
+        </HexPanel>
+
+        <HexPanel fill="var(--fp-surface-secondary)" contentStyle={{ padding: "20px 24px" }}>
           <div className="grid gap-3 md:grid-cols-[1.3fr_1fr_auto]">
             <label className="text-sm font-semibold text-slate-200">
               Search inventory
@@ -394,21 +398,21 @@ export default function AdminStockPage() {
               ))}
             </div>
           ) : null}
-        </section>
+        </HexPanel>
 
         {error ? (
-          <p className="mt-4 rounded-lg border border-red-300/30 bg-red-500/10 px-3 py-2 text-sm text-red-200">
+          <div style={{ padding: "12px 16px", borderRadius: 10, border: "1px solid rgba(220,38,38,0.4)", background: "rgba(220,38,38,0.08)", color: "#fca5a5", fontSize: 13 }}>
             {error}
-          </p>
+          </div>
         ) : null}
 
         {status ? (
-          <p className="mt-4 rounded-lg border border-emerald-300/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-100">
+          <div style={{ padding: "12px 16px", borderRadius: 10, border: "1px solid rgba(104,148,102,0.4)", background: "rgba(104,148,102,0.08)", color: "#86efac", fontSize: 13 }}>
             {status}
-          </p>
+          </div>
         ) : null}
 
-        <section className="mt-5 rounded-xl border border-white/10 bg-slate-950/45 p-4">
+        <HexPanel fill="var(--fp-surface-secondary)" contentStyle={{ padding: "20px 24px" }}>
           <div className="overflow-auto rounded-lg border border-white/10">
             <table className="min-w-full divide-y divide-white/10 text-left text-sm">
               <thead className="bg-slate-800/70 text-slate-200">
@@ -481,23 +485,13 @@ export default function AdminStockPage() {
               </tbody>
             </table>
           </div>
-        </section>
+        </HexPanel>
 
-        <div className="mt-5 flex flex-wrap gap-2 text-xs">
-          <Link
-            href="/admin"
-            className="rounded-lg border border-white/15 px-3 py-1.5 text-slate-200 hover:border-emerald-300/60"
-          >
-            Admin Dashboard
-          </Link>
-          <Link
-            href="/inventory"
-            className="rounded-lg border border-white/15 px-3 py-1.5 text-slate-200 hover:border-emerald-300/60"
-          >
-            AI Inventory Upload
-          </Link>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+          <Link href="/admin" style={navLink}>Admin Dashboard</Link>
+          <Link href="/inventory" style={navLink}>AI Inventory Upload</Link>
         </div>
-      </main>
+      </div>
     </div>
   );
 }

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { signInWithPopup, signOut } from "firebase/auth";
 import { Suspense, useEffect, useMemo, useState } from "react";
+import HexPanel from "../components/HexPanel";
 
 import LoadingAnimation from "@/components/LoadingAnimation";
 import { createGoogleProvider, getFirebaseClientAuth, isFirebaseClientConfigured } from "@/lib/firebase-client";
@@ -192,100 +193,68 @@ function LoginContent() {
 
   const firebaseConfigured = isFirebaseClientConfigured();
 
+  const navLink = { padding: "8px 14px", borderRadius: 10, border: "1px solid var(--fp-panel-border)", color: "var(--fp-text-secondary)", fontSize: 13, fontWeight: 600, textDecoration: "none", background: "var(--fp-input-bg)" } as React.CSSProperties;
+
   return (
-    <div className="min-h-screen bg-slate-950 px-4 py-8 text-slate-100 md:px-8">
-      <main className="mx-auto w-full max-w-2xl rounded-3xl border border-white/10 bg-slate-900/50 p-5 shadow-2xl md:p-8">
-        <p className="inline-flex rounded-full border border-cyan-300/40 bg-cyan-300/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-cyan-100">
-          Hub Access
-        </p>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight text-white md:text-4xl">
-          Sign in with your school account
-        </h1>
-        <p className="mt-3 text-sm text-slate-300 md:text-base">
-          Admins must be manually assigned by Firebase UID. Students can sign in when their school
-          email domain is linked to an admin-managed Hub.
-        </p>
+    <div style={{ minHeight: "100dvh", background: "var(--fp-page-bg)", padding: "32px 24px", boxSizing: "border-box", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ width: "100%", maxWidth: 520 }}>
+        <HexPanel contentStyle={{ padding: "28px 28px", display: "flex", flexDirection: "column", gap: 16 }}>
+          <div>
+            <p style={{ fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.14em", color: "var(--fp-text-muted)", margin: "0 0 4px" }}>Hub Access</p>
+            <h1 style={{ color: "var(--fp-text-primary)", fontSize: "clamp(20px, 5vw, 28px)", fontWeight: 800, margin: "0 0 8px" }}>Sign in with your school account</h1>
+            <p style={{ color: "var(--fp-text-secondary)", fontSize: 14, margin: 0, lineHeight: 1.6 }}>
+              Admins must be manually assigned by Firebase UID. Students can sign in when their school email domain is linked to an admin-managed Hub.
+            </p>
+          </div>
 
-        <div className="mt-5 rounded-xl border border-white/10 bg-slate-950/45 p-4 text-sm text-slate-200">
-          <p>Admin routes are protected by role checks on both page access and API actions.</p>
-          <p className="mt-1">Student access is scoped to your connected university domain.</p>
-        </div>
+          <HexPanel fill="var(--fp-surface-secondary)" contentStyle={{ padding: "12px 16px" }}>
+            <p style={{ color: "var(--fp-text-secondary)", fontSize: 13, margin: "0 0 4px" }}>Admin routes are protected by role checks on both page access and API actions.</p>
+            <p style={{ color: "var(--fp-text-secondary)", fontSize: 13, margin: 0 }}>Student access is scoped to your connected university domain.</p>
+          </HexPanel>
 
-        {!firebaseConfigured ? (
-          <p className="mt-4 rounded-lg border border-red-300/30 bg-red-500/10 px-3 py-2 text-sm text-red-200">
-            Firebase web config is missing. Add FIREBASE_API_KEY, FIREBASE_AUTH_DOMAIN,
-            FIREBASE_PROJECT_ID, and FIREBASE_APP_ID.
-          </p>
-        ) : null}
+          {!firebaseConfigured && (
+            <p style={{ padding: "10px 14px", borderRadius: 8, border: "1px solid rgba(220,38,38,0.4)", background: "rgba(220,38,38,0.08)", color: "#fca5a5", fontSize: 13, margin: 0 }}>
+              Firebase web config is missing. Add FIREBASE_API_KEY, FIREBASE_AUTH_DOMAIN, FIREBASE_PROJECT_ID, and FIREBASE_APP_ID.
+            </p>
+          )}
+          {error && (
+            <p style={{ padding: "10px 14px", borderRadius: 8, border: "1px solid rgba(220,38,38,0.4)", background: "rgba(220,38,38,0.08)", color: "#fca5a5", fontSize: 13, margin: 0 }}>{error}</p>
+          )}
+          {status && (
+            <p style={{ padding: "10px 14px", borderRadius: 8, border: "1px solid rgba(104,148,102,0.4)", background: "rgba(104,148,102,0.08)", color: "#86efac", fontSize: 13, margin: 0 }}>{status}</p>
+          )}
 
-        {error ? (
-          <p className="mt-4 rounded-lg border border-red-300/30 bg-red-500/10 px-3 py-2 text-sm text-red-200">
-            {error}
-          </p>
-        ) : null}
+          <nav style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            <Link href="/" style={navLink}>Home</Link>
+            <Link href="/student/inventory" style={navLink}>Student Inventory</Link>
+            <Link href="/admin" style={navLink}>Admin Dashboard</Link>
+          </nav>
 
-        {status ? (
-          <p className="mt-4 rounded-lg border border-emerald-300/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-100">
-            {status}
-          </p>
-        ) : null}
-
-        <div className="mt-5 flex flex-wrap gap-2 text-xs">
-          <Link
-            href="/"
-            className="rounded-lg border border-white/15 px-3 py-1.5 text-slate-200 hover:border-cyan-300/60"
-          >
-            Home
-          </Link>
-          <Link
-            href="/student/inventory"
-            className="rounded-lg border border-white/15 px-3 py-1.5 text-slate-200 hover:border-cyan-300/60"
-          >
-            Student Inventory
-          </Link>
-          <Link
-            href="/admin"
-            className="rounded-lg border border-white/15 px-3 py-1.5 text-slate-200 hover:border-cyan-300/60"
-          >
-            Admin Dashboard
-          </Link>
-        </div>
-
-        <div className="mt-6 space-y-3">
-          {isLoadingSession ? (
-            <div className="rounded-xl border border-white/10 bg-slate-950/45 p-2">
-              <LoadingAnimation
-                message="Checking your session..."
-                className="py-2"
-                iconClassName="h-20 w-20"
-                messageClassName="mt-2 text-sm font-medium text-slate-300"
-              />
-            </div>
-          ) : null}
-
-          <button
-            type="button"
-            disabled={!firebaseConfigured || isLoggingIn || isLoadingSession}
-            onClick={() => void handleGoogleLogin()}
-            className="inline-flex w-full items-center justify-center rounded-lg bg-slate-100 px-4 py-3 text-sm font-semibold text-slate-900 transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {isLoadingSession
-              ? "Checking session..."
-              : isLoggingIn
-                ? "Signing in..."
-                : "Continue with Google"}
-          </button>
-
-          <button
-            type="button"
-            disabled={!firebaseConfigured || isLoggingOut || !sessionUser}
-            onClick={() => void handleLogout()}
-            className="inline-flex w-full items-center justify-center rounded-lg border border-white/20 bg-transparent px-4 py-3 text-sm font-semibold text-slate-200 transition hover:border-cyan-300/60 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {isLoggingOut ? "Signing out..." : "Sign out"}
-          </button>
-        </div>
-      </main>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {isLoadingSession && (
+              <HexPanel fill="var(--fp-surface-secondary)" contentStyle={{ padding: 8 }}>
+                <LoadingAnimation message="Checking your session..." className="py-2" iconClassName="h-20 w-20" messageClassName="mt-2 text-sm font-medium text-slate-300" />
+              </HexPanel>
+            )}
+            <button
+              type="button"
+              disabled={!firebaseConfigured || isLoggingIn || isLoadingSession}
+              onClick={() => void handleGoogleLogin()}
+              style={{ width: "100%", padding: "14px 16px", borderRadius: 10, border: "none", background: isLoggingIn || isLoadingSession ? "#334155" : "#e2e8f0", color: "#0f1825", fontSize: 15, fontWeight: 700, cursor: !firebaseConfigured || isLoggingIn || isLoadingSession ? "not-allowed" : "pointer", opacity: !firebaseConfigured || isLoggingIn || isLoadingSession ? 0.6 : 1 }}
+            >
+              {isLoadingSession ? "Checking session…" : isLoggingIn ? "Signing in…" : "Continue with Google"}
+            </button>
+            <button
+              type="button"
+              disabled={!firebaseConfigured || isLoggingOut || !sessionUser}
+              onClick={() => void handleLogout()}
+              style={{ width: "100%", padding: "14px 16px", borderRadius: 10, border: "1px solid var(--fp-panel-border)", background: "var(--fp-input-bg)", color: "var(--fp-text-secondary)", fontSize: 15, fontWeight: 700, cursor: !firebaseConfigured || isLoggingOut || !sessionUser ? "not-allowed" : "pointer", opacity: !firebaseConfigured || isLoggingOut || !sessionUser ? 0.5 : 1 }}
+            >
+              {isLoggingOut ? "Signing out…" : "Sign out"}
+            </button>
+          </div>
+        </HexPanel>
+      </div>
     </div>
   );
 }
@@ -294,15 +263,8 @@ export default function LoginPage() {
   return (
     <Suspense
       fallback={
-        <div className="min-h-screen bg-slate-950 px-4 py-8 text-slate-100 md:px-8">
-          <main className="mx-auto w-full max-w-2xl rounded-3xl border border-white/10 bg-slate-900/50 p-5 shadow-2xl md:p-8">
-            <LoadingAnimation
-              message="Loading login..."
-              className="py-2"
-              iconClassName="h-20 w-20"
-              messageClassName="mt-2 text-sm font-medium text-slate-300"
-            />
-          </main>
+        <div style={{ minHeight: "100dvh", background: "var(--fp-page-bg)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <LoadingAnimation message="Loading login…" className="py-2" iconClassName="h-20 w-20" messageClassName="mt-2 text-sm font-medium" />
         </div>
       }
     >

@@ -1,62 +1,11 @@
 'use client'
 
-import type React from 'react'
 import { useEffect, useState } from 'react'
 import { QueryFetchPolicy } from 'firebase/data-connect'
 import FloorPlanCanvas, { CATEGORIES, FLOORPLAN_CANVAS_SIZE, MARKER_CONFIGS, MarkerIcon, type CategoryId } from '../components/FloorPlanCanvas'
+import HexPanel from '../components/HexPanel'
 import { dataConnect } from '../../src/lib/firebase'
 import { getAllFloorPlans } from '../../src/dataconnect-generated'
-
-const CUT_CORNER_SIZE = 22
-const PANEL_BORDER_WIDTH = 3
-
-function hexClip(cut: number) {
-  return `polygon(${cut}px 0, calc(100% - ${cut}px) 0, 100% ${cut}px, 100% calc(100% - ${cut}px), calc(100% - ${cut}px) 100%, ${cut}px 100%, 0 calc(100% - ${cut}px), 0 ${cut}px)`
-}
-
-function StudentHexPanel({
-  children,
-  fill = 'var(--fp-surface-primary)',
-  borderColor = 'var(--fp-panel-border)',
-  style,
-  contentStyle,
-}: {
-  children: React.ReactNode
-  fill?: string
-  borderColor?: string
-  style?: React.CSSProperties
-  contentStyle?: React.CSSProperties
-}) {
-  const innerCut = Math.max(0, CUT_CORNER_SIZE - PANEL_BORDER_WIDTH)
-
-  return (
-    <div style={{ position: 'relative', overflow: 'visible', ...style }}>
-      <div
-        aria-hidden="true"
-        style={{
-          position: 'absolute',
-          inset: 0,
-          clipPath: hexClip(CUT_CORNER_SIZE),
-          background: borderColor,
-          boxShadow: '0 0 0 1px var(--fp-panel-glow-1), 0 0 14px var(--fp-panel-glow-2), 0 0 30px var(--fp-panel-glow-2), 0 0 52px var(--fp-panel-glow-3)',
-          filter: 'drop-shadow(0 0 8px var(--fp-panel-drop-1)) drop-shadow(0 0 18px var(--fp-panel-drop-2)) drop-shadow(0 0 34px var(--fp-panel-drop-3)) drop-shadow(0 8px 14px rgba(0,0,0,0.45))',
-          pointerEvents: 'none',
-        }}
-      />
-      <div
-        style={{
-          position: 'relative',
-          margin: PANEL_BORDER_WIDTH,
-          clipPath: hexClip(innerCut),
-          background: fill,
-          ...contentStyle,
-        }}
-      >
-        {children}
-      </div>
-    </div>
-  )
-}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -211,7 +160,7 @@ export default function MapPage() {
       }}
     >
       {/* Header */}
-      <StudentHexPanel
+      <HexPanel
         style={{ width: 'fit-content', alignSelf: 'center', marginBottom: 16 }}
         contentStyle={{ textAlign: 'center', padding: '14px 22px' }}
       >
@@ -221,22 +170,22 @@ export default function MapPage() {
         <p style={{ color: 'var(--fp-text-muted)', fontSize: 'clamp(13px, 3vw, 15px)', margin: 0 }}>
           Find what you need before you arrive
         </p>
-      </StudentHexPanel>
+      </HexPanel>
 
       {loading && (
-        <StudentHexPanel style={{ width: 'fit-content', alignSelf: 'center', marginTop: 24 }} contentStyle={{ textAlign: 'center', color: 'var(--fp-text-muted)', fontSize: 16, fontWeight: 700, padding: '12px 18px' }}>
+        <HexPanel style={{ width: 'fit-content', alignSelf: 'center', marginTop: 24 }} contentStyle={{ textAlign: 'center', color: 'var(--fp-text-muted)', fontSize: 16, fontWeight: 700, padding: '12px 18px' }}>
           Loading floor plan…
-        </StudentHexPanel>
+        </HexPanel>
       )}
       {error && (
-        <StudentHexPanel style={{ width: 'fit-content', alignSelf: 'center', marginTop: 24 }} contentStyle={{ textAlign: 'center', color: 'var(--fp-danger)', fontSize: 15, fontWeight: 700, padding: '12px 18px' }}>
+        <HexPanel style={{ width: 'fit-content', alignSelf: 'center', marginTop: 24 }} contentStyle={{ textAlign: 'center', color: 'var(--fp-danger)', fontSize: 15, fontWeight: 700, padding: '12px 18px' }}>
           {error}
-        </StudentHexPanel>
+        </HexPanel>
       )}
       {!loading && !error && shelves.length === 0 && markers.length === 0 && walls.length === 0 && (
-        <StudentHexPanel style={{ width: 'fit-content', alignSelf: 'center', marginTop: 24 }} contentStyle={{ textAlign: 'center', color: 'var(--fp-text-subtle)', fontSize: 15, fontWeight: 600, padding: '12px 18px' }}>
+        <HexPanel style={{ width: 'fit-content', alignSelf: 'center', marginTop: 24 }} contentStyle={{ textAlign: 'center', color: 'var(--fp-text-subtle)', fontSize: 15, fontWeight: 600, padding: '12px 18px' }}>
           No floor plan has been published yet. Check back soon!
-        </StudentHexPanel>
+        </HexPanel>
       )}
 
       {!loading && !error && (shelves.length > 0 || markers.length > 0 || walls.length > 0) && (
@@ -257,7 +206,7 @@ export default function MapPage() {
           />
 
           {/* Legend — compact horizontal grid below canvas */}
-          <StudentHexPanel
+          <HexPanel
             style={{ width: canvasSize }}
             fill="#ffffff"
             contentStyle={{ padding: '18px 22px' }}
@@ -283,7 +232,7 @@ export default function MapPage() {
                 <span style={{ fontSize: 16, color: 'var(--fp-text-secondary)', fontWeight: 600 }}>Wall</span>
               </div>
             </div>
-          </StudentHexPanel>
+          </HexPanel>
         </div>
       )}
     </main>

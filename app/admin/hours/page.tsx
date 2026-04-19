@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import HexPanel from "../../components/HexPanel";
 
 const defaultWeeklyHours = [
   { day: "Monday", hours: "9:00 AM - 5:00 PM" },
@@ -219,21 +220,24 @@ export default function AdminHoursPage() {
     }
   }
 
+  const navLink = { padding: "8px 14px", borderRadius: 10, border: "1px solid var(--fp-panel-border)", color: "var(--fp-text-secondary)", fontSize: 13, fontWeight: 600, textDecoration: "none", background: "var(--fp-input-bg)" } as React.CSSProperties;
+
   return (
-    <div className="min-h-screen bg-[#F8F6F2] px-4 py-8 text-[#243B53] md:px-8">
-      <main className="mx-auto w-full max-w-5xl rounded-3xl border border-[#1D4ED8]/10 bg-white p-5 shadow-[0_18px_50px_rgba(36,59,83,0.08)] md:p-8">
-        <p className="inline-flex rounded-full border border-[#D4A62A]/30 bg-[#FFF7E1] px-3 py-1 text-xs font-semibold uppercase tracking-[0.12em] text-[#9A6B00]">
-          Admin Settings
-        </p>
+    <div style={{ minHeight: "100dvh", background: "var(--fp-page-bg)", padding: "32px 24px", boxSizing: "border-box" }}>
+      <div style={{ maxWidth: 900, margin: "0 auto", display: "flex", flexDirection: "column", gap: 20 }}>
+      <HexPanel contentStyle={{ padding: "20px 24px", display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 14 }}>
+        <div>
+          <p style={{ fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.14em", color: "var(--fp-text-muted)", margin: "0 0 4px" }}>Admin Settings</p>
+          <h1 style={{ color: "var(--fp-text-primary)", fontSize: "clamp(22px, 5vw, 30px)", fontWeight: 800, margin: "0 0 4px" }}>Manage Hub Hours</h1>
+          <p style={{ color: "var(--fp-text-secondary)", fontSize: 14, margin: 0 }}>Configure the Hub details that appear on the student-facing hours page.</p>
+        </div>
+        <nav style={{ display: "flex", gap: 8 }}>
+          <Link href="/admin" style={navLink}>Admin Dashboard</Link>
+          <Link href="/hours" style={navLink}>Student Hours</Link>
+        </nav>
+      </HexPanel>
 
-        <h1 className="mt-3 text-3xl font-semibold leading-tight text-[#123B7A] md:text-5xl">
-          Manage Hub Hours
-        </h1>
-
-        <p className="mt-3 max-w-3xl text-sm leading-6 text-[#486581] md:text-base">
-          Configure the Hub details that appear on the student-facing hours page,
-          including the weekly schedule, location, and support text.
-        </p>
+      <HexPanel fill="var(--fp-surface-secondary)" contentStyle={{ padding: "20px 24px" }}>
 
         <form onSubmit={handleSave} className="mt-6 space-y-6">
           <section className="rounded-2xl border border-[#1D4ED8]/10 bg-[#FCFDFF] p-5">
@@ -366,7 +370,8 @@ export default function AdminHoursPage() {
             Student Hours Page
           </Link>
         </div>
-      </main>
+      </HexPanel>
+      </div>
     </div>
   );
 }

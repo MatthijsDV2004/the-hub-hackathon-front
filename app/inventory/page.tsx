@@ -5,6 +5,7 @@ import Link from "next/link";
 import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
 
 import LoadingAnimation from "@/components/LoadingAnimation";
+import HexPanel from "../components/HexPanel";
 
 type AnalyzeResponse = {
   text?: string;
@@ -1430,36 +1431,23 @@ export default function InventoryPage() {
     }
   };
 
+  const navLink = { padding: "8px 14px", borderRadius: 10, border: "1px solid var(--fp-panel-border)", color: "var(--fp-text-secondary)", fontSize: 13, fontWeight: 600, textDecoration: "none", background: "var(--fp-input-bg)" } as React.CSSProperties;
+
   return (
-    <div className="min-h-screen bg-stone-50 px-4 py-8 text-slate-900 md:px-8">
-      <main className="mx-auto w-full max-w-5xl space-y-5">
-        <header className="flex flex-wrap items-center justify-between gap-3">
+    <div style={{ minHeight: "100dvh", background: "var(--fp-page-bg)", padding: "32px 24px", boxSizing: "border-box" }}>
+      <div style={{ maxWidth: 1100, margin: "0 auto", display: "flex", flexDirection: "column", gap: 20 }}>
+        <HexPanel contentStyle={{ padding: "20px 24px", display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 14 }}>
           <div>
-            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-              Admin · Inventory
-            </p>
-            <h1 className="mt-1 text-2xl font-semibold tracking-tight text-slate-900 md:text-3xl">
-              AI Shelf Inventory Uploader
-            </h1>
-            <p className="mt-1 text-sm text-slate-600">
-              Upload images and add detected items to inventory.
-            </p>
+            <p style={{ fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.14em", color: "var(--fp-text-muted)", margin: "0 0 4px" }}>Admin · Inventory</p>
+            <h1 style={{ color: "var(--fp-text-primary)", fontSize: "clamp(22px, 5vw, 30px)", fontWeight: 800, margin: "0 0 4px" }}>AI Shelf Inventory Uploader</h1>
+            <p style={{ color: "var(--fp-text-secondary)", fontSize: 14, margin: 0 }}>Upload images and add detected items to inventory.</p>
           </div>
-          <div className="flex gap-2">
-            <Link
-              href="/admin"
-              className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
-            >
-              Admin Home
-            </Link>
-            <Link
-              href="/"
-              className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
-            >
-              Back Home
-            </Link>
-          </div>
-        </header>
+          <nav style={{ display: "flex", gap: 8 }}>
+            <Link href="/admin" style={navLink}>Admin Home</Link>
+            <Link href="/" style={navLink}>Back Home</Link>
+          </nav>
+        </HexPanel>
+        <div className="space-y-5">
 
         {errorMessage ? (
           <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
@@ -1647,7 +1635,8 @@ export default function InventoryPage() {
             </ul>
           </section>
         ) : null}
-      </main>
+        </div>
+      </div>
     </div>
   );
 }
