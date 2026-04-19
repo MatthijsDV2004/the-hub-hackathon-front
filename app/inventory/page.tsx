@@ -4,6 +4,8 @@ import Image from "next/image";
 import Link from "next/link";
 import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
 
+import LoadingAnimation from "@/components/LoadingAnimation";
+
 type AnalyzeResponse = {
   text?: string;
   error?: string;
@@ -586,6 +588,10 @@ export default function InventoryPage() {
             <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
               <h2 className="mb-3 text-sm font-semibold text-slate-800">Detected inventory items</h2>
 
+              {isProcessing ? (
+                <LoadingAnimation />
+              ) : (
+                <>
               {snapshot.sceneSummary ? (
                 <p className="mb-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
                   {snapshot.sceneSummary}
@@ -669,6 +675,8 @@ export default function InventoryPage() {
                   </ul>
                 </div>
               ) : null}
+                </>
+              )}
             </div>
           </section>
         </form>
