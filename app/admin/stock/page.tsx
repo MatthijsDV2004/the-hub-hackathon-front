@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -411,6 +412,7 @@ export default function AdminStockPage() {
               <thead className="bg-slate-800/70 text-slate-200">
                 <tr>
                   <th className="px-3 py-2 font-semibold">Shelf</th>
+                  <th className="px-3 py-2 font-semibold">Photo</th>
                   <th className="px-3 py-2 font-semibold">Brand</th>
                   <th className="px-3 py-2 font-semibold">Item</th>
                   <th className="px-3 py-2 font-semibold">Category</th>
@@ -425,6 +427,19 @@ export default function AdminStockPage() {
                     <tr key={item.id}>
                       <td className="px-3 py-2 text-emerald-100">
                         {item.shelf?.name || (item.shelfId ? `Shelf ${item.shelfId.slice(0, 8)}` : "Unassigned")}
+                      </td>
+                      <td className="px-3 py-2">
+                        {item.photoUrl ? (
+                          <Image
+                            src={item.photoUrl}
+                            alt={`${item.name} photo`}
+                            width={52}
+                            height={52}
+                            className="h-12 w-12 rounded-md border border-white/10 object-cover"
+                          />
+                        ) : (
+                          <span className="text-xs text-slate-500">-</span>
+                        )}
                       </td>
                       <td className="px-3 py-2">{item.brand}</td>
                       <td className="px-3 py-2 text-slate-100">{item.name}</td>
@@ -445,7 +460,7 @@ export default function AdminStockPage() {
                   ))
                 ) : (
                   <tr>
-                    <td colSpan={7} className="px-3 py-5 text-center text-slate-400">
+                    <td colSpan={8} className="px-3 py-5 text-center text-slate-400">
                       {isLoading ? "Loading inventory..." : "No inventory items match your filters."}
                     </td>
                   </tr>

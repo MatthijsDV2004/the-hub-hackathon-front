@@ -1,5 +1,12 @@
 import { randomUUID } from "crypto";
 import { executeDataConnect } from "@/lib/dataconnect";
+import {
+  extractHubDomainMarker,
+  isHubVisibleToDomain,
+  stripHubDomainMarker,
+  withHubDomainMarker,
+} from "@/lib/auth/hub-domain";
+import { requireAdminHubSession, requireHubSession } from "@/lib/auth/request";
 
 type InventoryItemRow = {
   id?: string | null;
@@ -8,10 +15,17 @@ type InventoryItemRow = {
   brand?: string;
   name?: string;
   quantity?: number;
+  size?: string;
   "package-size"?: string;
   category?: string;
+  type?: string;
   description?: string;
   photoUrl?: string;
+  locationCenterX?: number | null;
+  locationCenterY?: number | null;
+  locationRadius?: number | null;
+  imageWidth?: number | null;
+  imageHeight?: number | null;
 };
 
 type SaveInventoryItemsBody = {
@@ -27,6 +41,14 @@ type ShelfSummary = {
   locationDescription: string | null;
 };
 
+type ItemLocation = {
+  centerX: number;
+  centerY: number;
+  radius: number;
+  imageWidth: number;
+  imageHeight: number;
+};
+
 type StudentInventoryItem = {
   id: string;
   shelfId: string | null;
@@ -35,11 +57,13 @@ type StudentInventoryItem = {
   brand: string;
   quantity: number;
   category: string | null;
+  type: string | null;
   createdAt: string | null;
   updatedAt: string | null;
   description: string | null;
   photoUrl: string | null;
   size: string | null;
+  location: ItemLocation | null;
 };
 
 type NormalizedRow = {
@@ -50,13 +74,59 @@ type NormalizedRow = {
   quantity: number;
   size: string | null;
   category: string | null;
+  type: string | null;
   description: string | null;
   photoUrl: string;
   createdAt: string;
   updatedAt: string;
+  location: ItemLocation | null;
 };
 
 const DEFAULT_INSERT_MUTATION = `
+mutation InsertInventoryItem(
+  $id: UUID
+  $shelfId: UUID
+  $name: String
+  $brand: String
+  $quantity: Int
+  $size: String
+  $category: String
+  $type: String
+  $description: String
+  $photoUrl: String
+  $locationCenterX: Float
+  $locationCenterY: Float
+  $locationRadius: Float
+  $imageWidth: Float
+  $imageHeight: Float
+  $createdAt: Timestamp
+  $updatedAt: Timestamp
+) {
+  inventoryItem_insert(
+    data: {
+      id: $id
+      shelfId: $shelfId
+      name: $name
+      brand: $brand
+      quantity: $quantity
+      size: $size
+      category: $category
+      type: $type
+      description: $description
+      photoUrl: $photoUrl
+      locationCenterX: $locationCenterX
+      locationCenterY: $locationCenterY
+      locationRadius: $locationRadius
+      imageWidth: $imageWidth
+      imageHeight: $imageHeight
+      createdAt: $createdAt
+      updatedAt: $updatedAt
+    }
+  )
+}
+`.trim();
+
+const LEGACY_INSERT_MUTATION = `
 mutation InsertInventoryItem(
   $id: UUID
   $shelfId: UUID
@@ -122,6 +192,35 @@ query StudentInventory {
     brand
     quantity
     category
+    type
+    createdAt
+    updatedAt
+    description
+    photoUrl
+    size
+    locationCenterX
+    locationCenterY
+    locationRadius
+    imageWidth
+    imageHeight
+  }
+}
+`.trim();
+
+const LEGACY_LIST_QUERY = `
+query StudentInventory {
+  inventoryItems(limit: __LIMIT__) {
+    id
+    shelfId
+    shelf {
+      id
+      name
+      locationDescription
+    }
+    name
+    brand
+    quantity
+    category
     createdAt
     updatedAt
     description
@@ -137,14 +236,19 @@ mutation DeleteInventoryItem($id: UUID) {
 }
 `.trim();
 
-const DEFAULT_DELETE_ALL_MUTATION = `
-mutation DeleteAllInventoryItems {
-  inventoryItem_deleteMany(all: true)
-}
-`.trim();
-
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const LOCATION_MARKER_PREFIX = "[[LOC]]";
+const LOCATION_SCHEMA_FIELDS = [
+  "locationCenterX",
+  "locationCenterY",
+  "locationRadius",
+  "imageWidth",
+  "imageHeight",
+];
+
+const TYPE_SCHEMA_FIELDS = ["type"];
 
 function normalizeUuid(value: string | null | undefined) {
   const trimmed = value?.trim() || "";
@@ -161,6 +265,127 @@ function normalizeText(value: string | null | undefined) {
     .replace(/[^a-z0-9]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function normalizeNumber(value: unknown) {
+  if (value == null) {
+    return null;
+  }
+
+  if (typeof value === "string" && value.trim() === "") {
+    return null;
+  }
+
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return null;
+  }
+  return parsed;
+}
+
+function normalizeLocationFromInput(item: InventoryItemRow): ItemLocation | null {
+  const centerX = normalizeNumber(item.locationCenterX);
+  const centerY = normalizeNumber(item.locationCenterY);
+  const radius = normalizeNumber(item.locationRadius);
+  const imageWidth = normalizeNumber(item.imageWidth);
+  const imageHeight = normalizeNumber(item.imageHeight);
+
+  if (
+    centerX == null ||
+    centerY == null ||
+    radius == null ||
+    imageWidth == null ||
+    imageHeight == null ||
+    radius <= 0 ||
+    imageWidth <= 0 ||
+    imageHeight <= 0
+  ) {
+    return null;
+  }
+
+  return {
+    centerX,
+    centerY,
+    radius,
+    imageWidth,
+    imageHeight,
+  };
+}
+
+function extractLocationMarker(description: string | null) {
+  if (!description) {
+    return {
+      description: null,
+      location: null as ItemLocation | null,
+    };
+  }
+
+  const markerIndex = description.lastIndexOf(LOCATION_MARKER_PREFIX);
+  if (markerIndex < 0) {
+    return {
+      description,
+      location: null as ItemLocation | null,
+    };
+  }
+
+  const rawJson = description.slice(markerIndex + LOCATION_MARKER_PREFIX.length).trim();
+  const baseDescription = description.slice(0, markerIndex).trim() || null;
+
+  try {
+    const parsed = JSON.parse(rawJson) as Record<string, unknown>;
+    const location = normalizeLocationFromInput({
+      locationCenterX: normalizeNumber(parsed.centerX),
+      locationCenterY: normalizeNumber(parsed.centerY),
+      locationRadius: normalizeNumber(parsed.radius),
+      imageWidth: normalizeNumber(parsed.imageWidth),
+      imageHeight: normalizeNumber(parsed.imageHeight),
+    });
+
+    return {
+      description: baseDescription,
+      location,
+    };
+  } catch {
+    return {
+      description,
+      location: null as ItemLocation | null,
+    };
+  }
+}
+
+function appendLocationMarker(description: string | null, location: ItemLocation | null) {
+  if (!location) {
+    return description;
+  }
+
+  const markerPayload = JSON.stringify({
+    centerX: Number(location.centerX.toFixed(2)),
+    centerY: Number(location.centerY.toFixed(2)),
+    radius: Number(location.radius.toFixed(2)),
+    imageWidth: Number(location.imageWidth.toFixed(2)),
+    imageHeight: Number(location.imageHeight.toFixed(2)),
+  });
+
+  if (!description) {
+    return `${LOCATION_MARKER_PREFIX}${markerPayload}`;
+  }
+
+  return `${description}\n${LOCATION_MARKER_PREFIX}${markerPayload}`;
+}
+
+function isLocationSchemaMismatch(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error || "");
+  const mentionsKnownField = [...LOCATION_SCHEMA_FIELDS, ...TYPE_SCHEMA_FIELDS].some((field) =>
+    message.includes(field)
+  );
+
+  if (!mentionsKnownField) {
+    return false;
+  }
+
+  return /(Cannot query field|Unknown argument|Unknown field|not defined by type|not found in type)/i.test(
+    message
+  );
 }
 
 function buildPlaceholderPhotoUrl(id: string, name: string) {
@@ -180,13 +405,16 @@ function normalizeItem(item: InventoryItemRow): NormalizedRow | null {
 
   const id = normalizeUuid(item.id) || randomUUID();
   const shelfId = normalizeUuid(item.shelfId);
-  const size = item["package-size"]?.trim() || null;
+  const size = item.size?.trim() || item["package-size"]?.trim() || null;
   const category = item.category?.trim() || null;
+  const type = item.type?.trim() || null;
   const sku = item.sku?.trim() || "";
   const explicitBrand = item.brand?.trim() || "";
   const quantityRaw = Number(item.quantity);
   const quantity = Number.isFinite(quantityRaw) && quantityRaw > 0 ? Math.floor(quantityRaw) : 0;
   const photoUrl = item.photoUrl?.trim() || buildPlaceholderPhotoUrl(id, name);
+  const location = normalizeLocationFromInput(item);
+  const cleanDescription = item.description?.trim() || null;
   const nowIso = new Date().toISOString();
 
   return {
@@ -197,10 +425,12 @@ function normalizeItem(item: InventoryItemRow): NormalizedRow | null {
     quantity,
     size,
     category,
-    description: item.description?.trim() || null,
+    type,
+    description: cleanDescription,
     photoUrl,
     createdAt: nowIso,
     updatedAt: nowIso,
+    location,
   };
 }
 
@@ -272,6 +502,33 @@ function normalizeShelf(value: unknown): ShelfSummary | null {
   };
 }
 
+function sanitizeShelfForClient(shelf: ShelfSummary | null) {
+  if (!shelf) {
+    return null;
+  }
+
+  return {
+    ...shelf,
+    locationDescription: stripHubDomainMarker(shelf.locationDescription),
+  };
+}
+
+function sanitizeItemForClient(item: StudentInventoryItem): StudentInventoryItem {
+  return {
+    ...item,
+    shelf: sanitizeShelfForClient(item.shelf),
+  };
+}
+
+function isItemVisibleToHub(item: StudentInventoryItem, hubDomain: string) {
+  const markerDomain = extractHubDomainMarker(item.shelf?.locationDescription || null);
+  return isHubVisibleToDomain(markerDomain, hubDomain);
+}
+
+function filterItemsByHubDomain(items: StudentInventoryItem[], hubDomain: string) {
+  return items.filter((item) => isItemVisibleToHub(item, hubDomain));
+}
+
 function normalizeStudentInventoryItem(value: unknown): StudentInventoryItem | null {
   if (!value || typeof value !== "object") {
     return null;
@@ -288,6 +545,14 @@ function normalizeStudentInventoryItem(value: unknown): StudentInventoryItem | n
 
   const parsedShelf = normalizeShelf(row.shelf);
   const shelfId = readString(row.shelfId) || parsedShelf?.id || null;
+  const locationFromColumns = normalizeLocationFromInput({
+    locationCenterX: normalizeNumber(row.locationCenterX),
+    locationCenterY: normalizeNumber(row.locationCenterY),
+    locationRadius: normalizeNumber(row.locationRadius),
+    imageWidth: normalizeNumber(row.imageWidth),
+    imageHeight: normalizeNumber(row.imageHeight),
+  });
+  const parsedDescription = extractLocationMarker(readString(row.description));
 
   return {
     id: readString(row.id) || randomUUID(),
@@ -297,11 +562,13 @@ function normalizeStudentInventoryItem(value: unknown): StudentInventoryItem | n
     brand: readString(row.brand) || "Unknown",
     quantity,
     category: readString(row.category),
+    type: readString(row.type),
     createdAt: readString(row.createdAt),
     updatedAt: readString(row.updatedAt),
-    description: readString(row.description),
+    description: parsedDescription.description,
     photoUrl: readString(row.photoUrl),
     size: readString(row.size),
+    location: locationFromColumns || parsedDescription.location,
   };
 }
 
@@ -335,12 +602,17 @@ function extractItemRows(data: Record<string, unknown> | null) {
 function filterItems(
   items: StudentInventoryItem[],
   search: string,
-  shelfId: string | null
+  shelfId: string | null,
+  hubDomain: string
 ) {
   const normalizedSearch = normalizeText(search);
   const normalizedShelfId = normalizeUuid(shelfId);
 
   return items.filter((item) => {
+    if (!isItemVisibleToHub(item, hubDomain)) {
+      return false;
+    }
+
     if (normalizedShelfId && item.shelfId !== normalizedShelfId) {
       return false;
     }
@@ -354,6 +626,7 @@ function filterItems(
         item.name,
         item.brand,
         item.category,
+        item.type,
         item.size,
         item.description,
         item.shelf?.name,
@@ -367,7 +640,7 @@ function filterItems(
   });
 }
 
-async function ensureUploadShelf(body: SaveInventoryItemsBody) {
+async function ensureUploadShelf(body: SaveInventoryItemsBody, hubDomain: string) {
   const providedShelfId = normalizeUuid(body.shelfId);
   if (providedShelfId) {
     return {
@@ -383,8 +656,10 @@ async function ensureUploadShelf(body: SaveInventoryItemsBody) {
   const nowIso = new Date().toISOString();
   const shelfId = randomUUID();
   const shelfName = body.shelfName?.trim() || `Upload ${nowIso.slice(0, 16).replace("T", " ")}`;
-  const shelfLocationDescription =
-    body.shelfLocationDescription?.trim() || "Generated from inventory photo upload";
+  const shelfLocationDescription = withHubDomainMarker(
+    body.shelfLocationDescription?.trim() || "Generated from inventory photo upload",
+    hubDomain
+  );
 
   await executeDataConnect(DEFAULT_SHELF_INSERT_MUTATION, {
     id: shelfId,
@@ -399,37 +674,161 @@ async function ensureUploadShelf(body: SaveInventoryItemsBody) {
     shelf: {
       id: shelfId,
       name: shelfName,
-      locationDescription: shelfLocationDescription,
+      locationDescription: stripHubDomainMarker(shelfLocationDescription),
     } as ShelfSummary,
   };
 }
 
+async function listAllInventoryItems() {
+  const customQuery = process.env.FIREBASE_DATA_CONNECT_LIST_QUERY?.trim() || null;
+  const { data } = await executeInventoryListQuery(1000, customQuery);
+
+  return extractItemRows(data)
+    .map(normalizeStudentInventoryItem)
+    .filter((row): row is StudentInventoryItem => row !== null);
+}
+
+function buildKnownShelfDomainMap(items: StudentInventoryItem[]) {
+  const map = new Map<string, string | null>();
+
+  for (const item of items) {
+    if (!item.shelfId) {
+      continue;
+    }
+
+    const markerDomain = extractHubDomainMarker(item.shelf?.locationDescription || null);
+    if (markerDomain) {
+      map.set(item.shelfId, markerDomain);
+      continue;
+    }
+
+    if (!map.has(item.shelfId)) {
+      map.set(item.shelfId, null);
+    }
+  }
+
+  return map;
+}
+
+function buildListQuery(limit: number, includeLocationFields: boolean) {
+  const template = includeLocationFields ? DEFAULT_LIST_QUERY : LEGACY_LIST_QUERY;
+  return template.replace("__LIMIT__", String(limit));
+}
+
+async function executeInventoryListQuery(limit: number, customQuery: string | null) {
+  if (customQuery) {
+    try {
+      return await executeDataConnect(customQuery);
+    } catch (error) {
+      if (!isLocationSchemaMismatch(error)) {
+        throw error;
+      }
+    }
+  }
+
+  try {
+    return await executeDataConnect(buildListQuery(limit, true));
+  } catch (error) {
+    if (!isLocationSchemaMismatch(error)) {
+      throw error;
+    }
+
+    return executeDataConnect(buildListQuery(limit, false));
+  }
+}
+
+async function executeDefaultInsertWithFallback(rowsWithShelf: NormalizedRow[]) {
+  let savedCount = 0;
+  let useLegacyMutation = false;
+
+  for (const row of rowsWithShelf) {
+    const baseVariables = {
+      id: row.id,
+      shelfId: row.shelfId,
+      name: row.name,
+      brand: row.brand,
+      quantity: row.quantity,
+      size: row.size,
+      category: row.category,
+      type: row.type,
+      photoUrl: row.photoUrl,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    };
+
+    if (useLegacyMutation) {
+      await executeDataConnect(LEGACY_INSERT_MUTATION, {
+        ...baseVariables,
+        description: appendLocationMarker(row.description, row.location),
+      });
+      savedCount += 1;
+      continue;
+    }
+
+    try {
+      await executeDataConnect(DEFAULT_INSERT_MUTATION, {
+        ...baseVariables,
+        description: row.description,
+        locationCenterX: row.location?.centerX ?? null,
+        locationCenterY: row.location?.centerY ?? null,
+        locationRadius: row.location?.radius ?? null,
+        imageWidth: row.location?.imageWidth ?? null,
+        imageHeight: row.location?.imageHeight ?? null,
+      });
+    } catch (error) {
+      if (!isLocationSchemaMismatch(error)) {
+        throw error;
+      }
+
+      useLegacyMutation = true;
+      await executeDataConnect(LEGACY_INSERT_MUTATION, {
+        ...baseVariables,
+        description: appendLocationMarker(row.description, row.location),
+      });
+    }
+
+    savedCount += 1;
+  }
+
+  return {
+    savedCount,
+    persistenceMode: useLegacyMutation ? "description-marker" : "location-columns",
+  } as const;
+}
+
 export async function GET(request: Request) {
   try {
+    const sessionResult = await requireHubSession(request);
+    if (!sessionResult.ok) {
+      return sessionResult.response;
+    }
+
+    const session = sessionResult.session;
     const url = new URL(request.url);
     const limit = normalizeListLimit(url.searchParams.get("limit"));
     const search = url.searchParams.get("search") || "";
     const shelfId = url.searchParams.get("shelfId");
 
-    const customQuery = process.env.FIREBASE_DATA_CONNECT_LIST_QUERY?.trim();
-    const query = customQuery || DEFAULT_LIST_QUERY.replace("__LIMIT__", String(limit));
-
-    const { data } = await executeDataConnect(query);
+    const customQuery = process.env.FIREBASE_DATA_CONNECT_LIST_QUERY?.trim() || null;
+    const { data } = await executeInventoryListQuery(limit, customQuery);
     const allItems = extractItemRows(data)
       .map(normalizeStudentInventoryItem)
       .filter((row): row is StudentInventoryItem => row !== null)
       .sort((a, b) => toEpoch(b.updatedAt) - toEpoch(a.updatedAt));
 
-    const items = filterItems(allItems, search, shelfId);
+    const scopedItems = filterItemsByHubDomain(allItems, session.hubDomain);
+    const items = filterItems(scopedItems, search, shelfId, session.hubDomain).map(
+      sanitizeItemForClient
+    );
 
     const shelfMap = new Map<string, ShelfSummary>();
-    for (const item of allItems) {
+    for (const item of scopedItems) {
       if (!item.shelfId) {
         continue;
       }
 
       if (item.shelf) {
-        shelfMap.set(item.shelfId, item.shelf);
+        shelfMap.set(item.shelfId, sanitizeShelfForClient(item.shelf) as ShelfSummary);
         continue;
       }
 
@@ -459,6 +858,12 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
+    const sessionResult = await requireAdminHubSession(request);
+    if (!sessionResult.ok) {
+      return sessionResult.response;
+    }
+
+    const session = sessionResult.session;
     const body = (await request.json()) as SaveInventoryItemsBody;
     const rows = Array.isArray(body.items) ? body.items : [];
 
@@ -474,28 +879,50 @@ export async function POST(request: Request) {
       return Response.json({ error: "No valid items with names to save." }, { status: 400 });
     }
 
-    const { shelfId: uploadShelfId, shelf } = await ensureUploadShelf(body);
+    const { shelfId: uploadShelfId, shelf } = await ensureUploadShelf(body, session.hubDomain);
 
     const rowsWithShelf = normalizedRows.map((row) => ({
       ...row,
       shelfId: normalizeUuid(row.shelfId) || uploadShelfId,
     }));
+    const withLocationCount = rowsWithShelf.filter((row) => Boolean(row.location)).length;
+
+    const existingItems = await listAllInventoryItems();
+    const shelfDomainMap = buildKnownShelfDomainMap(existingItems);
+    shelfDomainMap.set(uploadShelfId, session.hubDomain);
+
+    for (const row of rowsWithShelf) {
+      if (!row.shelfId) {
+        continue;
+      }
+
+      if (row.shelfId !== uploadShelfId && !shelfDomainMap.has(row.shelfId)) {
+        return Response.json(
+          { error: `Unknown shelfId: ${row.shelfId}` },
+          { status: 400 }
+        );
+      }
+
+      const shelfDomain = shelfDomainMap.get(row.shelfId);
+      if (!isHubVisibleToDomain(shelfDomain, session.hubDomain)) {
+        return Response.json(
+          {
+            error:
+              "You can only save inventory into shelves that belong to your university hub.",
+          },
+          { status: 403 }
+        );
+      }
+    }
 
     const customMutation = process.env.FIREBASE_DATA_CONNECT_INSERT_MUTATION?.trim();
 
     if (customMutation) {
-      const { data } = await executeDataConnect(customMutation, {
-        items: rowsWithShelf,
-      });
-      return Response.json({
-        savedCount: inferSavedCount(data, rowsWithShelf.length),
-        shelf,
-      });
-    }
+      const customMutationSupportsLocationColumns = LOCATION_SCHEMA_FIELDS.every((field) =>
+        customMutation.includes(field)
+      );
 
-    let savedCount = 0;
-    for (const row of rowsWithShelf) {
-      await executeDataConnect(DEFAULT_INSERT_MUTATION, {
+      const customMutationItems = rowsWithShelf.map((row) => ({
         id: row.id,
         shelfId: row.shelfId,
         name: row.name,
@@ -503,15 +930,53 @@ export async function POST(request: Request) {
         quantity: row.quantity,
         size: row.size,
         category: row.category,
-        description: row.description,
+        type: row.type,
+        description: customMutationSupportsLocationColumns
+          ? row.description
+          : appendLocationMarker(row.description, row.location),
         photoUrl: row.photoUrl,
+        locationCenterX: row.location?.centerX ?? null,
+        locationCenterY: row.location?.centerY ?? null,
+        locationRadius: row.location?.radius ?? null,
+        imageWidth: row.location?.imageWidth ?? null,
+        imageHeight: row.location?.imageHeight ?? null,
         createdAt: row.createdAt,
         updatedAt: row.updatedAt,
-      });
-      savedCount += 1;
+      }));
+
+      try {
+        const { data } = await executeDataConnect(customMutation, {
+          items: customMutationItems,
+        });
+        return Response.json({
+          savedCount: inferSavedCount(data, rowsWithShelf.length),
+          shelf,
+          metadata: {
+            requestedCount: rowsWithShelf.length,
+            withLocationCount,
+              persistenceMode: customMutationSupportsLocationColumns
+                ? "custom-mutation-location-columns"
+                : "custom-mutation-description-marker",
+          },
+        });
+      } catch (error) {
+        if (!isLocationSchemaMismatch(error)) {
+          throw error;
+        }
+      }
     }
 
-    return Response.json({ savedCount, shelf });
+    const insertResult = await executeDefaultInsertWithFallback(rowsWithShelf);
+
+    return Response.json({
+      savedCount: insertResult.savedCount,
+      shelf,
+      metadata: {
+        requestedCount: rowsWithShelf.length,
+        withLocationCount,
+        persistenceMode: insertResult.persistenceMode,
+      },
+    });
   } catch (error) {
     const message =
       error instanceof Error
@@ -524,6 +989,12 @@ export async function POST(request: Request) {
 
 export async function DELETE(request: Request) {
   try {
+    const sessionResult = await requireAdminHubSession(request);
+    if (!sessionResult.ok) {
+      return sessionResult.response;
+    }
+
+    const session = sessionResult.session;
     const url = new URL(request.url);
     const scope = (url.searchParams.get("scope") || "").toLowerCase();
 
@@ -535,10 +1006,20 @@ export async function DELETE(request: Request) {
     }
 
     if (scope === "all") {
-      const { data } = await executeDataConnect(DEFAULT_DELETE_ALL_MUTATION);
+      const allItems = await listAllInventoryItems();
+      const scopedItems = filterItemsByHubDomain(allItems, session.hubDomain);
+
+      let deletedCount = 0;
+      for (const row of scopedItems) {
+        await executeDataConnect(DEFAULT_DELETE_SINGLE_MUTATION, {
+          id: row.id,
+        });
+        deletedCount += 1;
+      }
+
       return Response.json({
         scope,
-        deletedCount: inferSavedCount(data, 0),
+        deletedCount,
       });
     }
 
@@ -546,6 +1027,20 @@ export async function DELETE(request: Request) {
       const itemId = normalizeUuid(url.searchParams.get("itemId"));
       if (!itemId) {
         return Response.json({ error: "Missing or invalid itemId." }, { status: 400 });
+      }
+
+      const allItems = await listAllInventoryItems();
+      const target = allItems.find((row) => row.id === itemId) || null;
+
+      if (!target) {
+        return Response.json({ error: "Item not found." }, { status: 404 });
+      }
+
+      if (!isItemVisibleToHub(target, session.hubDomain)) {
+        return Response.json(
+          { error: "You cannot delete items from a different hub." },
+          { status: 403 }
+        );
       }
 
       const { data } = await executeDataConnect(DEFAULT_DELETE_SINGLE_MUTATION, {
@@ -568,14 +1063,26 @@ export async function DELETE(request: Request) {
         return Response.json({ error: "Missing or invalid shelfId." }, { status: 400 });
       }
 
-      const { data } = await executeDataConnect(
-        DEFAULT_LIST_QUERY.replace("__LIMIT__", "1000")
+      const allItems = await listAllInventoryItems();
+
+      const shelfItems = allItems
+        .filter((row) => row.shelfId === shelfId);
+
+      if (!shelfItems.length) {
+        return Response.json({ scope, shelfId, deletedCount: 0 });
+      }
+
+      const shelfDomain = extractHubDomainMarker(
+        shelfItems.find((row) => row.shelf?.locationDescription)?.shelf?.locationDescription ||
+          null
       );
 
-      const shelfItems = extractItemRows(data)
-        .map(normalizeStudentInventoryItem)
-        .filter((row): row is StudentInventoryItem => row !== null)
-        .filter((row) => row.shelfId === shelfId);
+      if (!isHubVisibleToDomain(shelfDomain, session.hubDomain)) {
+        return Response.json(
+          { error: "You cannot delete shelves from a different hub." },
+          { status: 403 }
+        );
+      }
 
       let deletedCount = 0;
       for (const row of shelfItems) {

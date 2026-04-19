@@ -34,3 +34,22 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+
+## Cloudinary Setup (Inventory Photos)
+
+To store uploaded inventory photos in Cloudinary and display them on inventory screens, set these environment variables:
+
+```bash
+CLOUDINARY_CLOUD_NAME=your-cloud-name
+CLOUDINARY_API_KEY=your-api-key
+CLOUDINARY_API_SECRET=your-api-secret
+# optional
+CLOUDINARY_UPLOAD_FOLDER=hub-inventory
+```
+
+The inventory upload flow will:
+1. Analyze the image with Gemini.
+2. Upload the same image to Cloudinary via `/api/cloudinary/upload`.
+3. Save each detected inventory row with the Cloudinary `secure_url` in `photoUrl`.
+
+Student and admin inventory tables render these saved images directly from Cloudinary.

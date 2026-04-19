@@ -11,90 +11,309 @@ type AnalyzeResponse = {
   error?: string;
 };
 
-type InventoryItem = {
+type CloudinaryUploadResponse = {
+  secureUrl?: string;
+  error?: string;
+};
+
+type SaveInventoryResponse = {
+  savedCount?: number;
+  metadata?: {
+    requestedCount?: number;
+    withLocationCount?: number;
+    persistenceMode?: string;
+  };
+  error?: string;
+};
+
+type ItemLocation = {
+  centerX: number;
+  centerY: number;
+  radius: number;
+  imageWidth: number;
+  imageHeight: number;
+};
+
+type RawInventoryItem = {
   sku?: string;
   brand: string;
-  itemName: string;
+  name: string;
   description: string;
-  packageDetails: string;
-  estimatedQuantityVisible: number;
+  size: string;
+  quantity: number;
+  visibleQuantity: number;
+  quantityEstimated: boolean;
   category: string;
+  type: string;
   confidence: "high" | "medium" | "low" | string;
+  location: ItemLocation | null;
 };
 
 type InventorySnapshot = {
   sceneSummary: string;
-  inventoryItems: InventoryItem[];
+  inventoryItems: RawInventoryItem[];
   notes: string[];
 };
 
-const DEFAULT_INVENTORY_PROMPT = `
-Context:
-My school has a Basic Needs Hub where donated groceries are delivered a few times a week by local partners.
-Students can receive groceries for free using their student ID, with item limits for some categories.
+type ImageDimensions = {
+  width: number;
+  height: number;
+};
 
-Task:
-Analyze this photo of Hub inventory and produce an inventory snapshot.
+type UploadImageStatus = "pending" | "processing" | "done" | "error";
 
-Return valid JSON only. Do not include markdown or code fences.
+type SelectedUploadImage = {
+  id: string;
+  file: File;
+  previewUrl: string;
+  status: UploadImageStatus;
+  detectedCount: number;
+  errorMessage: string | null;
+};
 
-Use this exact schema:
+type AnalyzeOneResult = {
+  rows: Array<Record<string, unknown>>;
+  detectedCount: number;
+  notes: string[];
+};
+
+function buildInventoryPrompt(imageWidth: number, imageHeight: number) {
+  return `
+You are cataloguing the inventory of a university basic-needs food pantry from a shelf photo.
+Accuracy matters more than completeness. It is better to label an item as unknown than to invent a product.
+
+Return ONLY valid JSON. No markdown. No code fences.
+
+Schema:
 {
   "sceneSummary": "string",
   "inventoryItems": [
     {
       "sku": "string or null",
+      "name": "string",
       "brand": "string",
-      "itemName": "string",
       "description": "short identifying description",
-      "packageDetails": "size/count such as 12 oz or 5-pack",
-      "estimatedQuantityVisible": 0,
+      "size": "required size/count (estimate if not visible)",
+      "visibleQuantity": 1,
+      "quantity": 1,
+      "quantityEstimated": false,
       "category": "dry|refrigerated|frozen|beverage|produce|hygiene|other",
-      "confidence": "high|medium|low"
+      "type": "cereal|granola|oatmeal|chips|crackers|cookies|snack bar|candy|dried fruit|nuts|trail mix|popcorn|pasta|rice|grain|beans|lentils|canned soup|canned vegetable|canned fruit|canned meat|sauce|condiment|peanut butter|jam|bread|tortilla|baking|seasoning|sugar|flour|oil|tea|coffee|juice|soda|water|milk|plant milk|yogurt|cheese|egg|produce|frozen meal|frozen vegetable|frozen fruit|hygiene|toiletry|paper goods|cleaning|other",
+      "confidence": "high|medium|low",
+      "location": {
+        "centerX": 0,
+        "centerY": 0,
+        "radius": 0,
+        "imageWidth": ${imageWidth},
+        "imageHeight": ${imageHeight}
+      }
     }
   ],
   "notes": ["string"]
 }
 
-Rules:
-- estimatedQuantityVisible must be an integer.
-- sku is optional. Use null when not visible.
-- brand should be included when visible; otherwise provide a best estimate.
-- If uncertain, still include best estimate and explain uncertainty in notes.
-- Include every distinct visible item type.
-`.trim();
+Identification rules (STRICT):
+- Only use words you can literally read off the package. If the label text is not legible, the name MUST be exactly "Unknown <type>" (for example "Unknown dried fruit", "Unknown cereal", "Unknown snack bar"). Do not compose plausible-sounding product names from colors, shapes, or adjacent items.
+- The "name" field must NEVER be a bare category word like "Cereal", "Chips", "Snack", "Food", "Item", or "Product". Those are types, not names. If you cannot read a real product name, use "Unknown <type>" instead.
+- Never combine a real brand with an invented product word (e.g. a brand logo plus a guessed flavor is NOT allowed). Either copy the full product name verbatim, or fall back to "Unknown <type>".
+- brand MUST be copied verbatim from the package if visible; otherwise set brand to "" (empty string). Never guess a brand.
 
-const EMPTY_SNAPSHOT: InventorySnapshot = {
-  sceneSummary: "",
-  inventoryItems: [],
-  notes: [],
-};
+Type classification rules (CRITICAL — do NOT let shelf context override package content):
+- type MUST describe what is physically inside THIS package, judged from THIS package's shape, material, imagery, and readable words. Shelf context (what's next to it, what the shelf is "usually" stocked with) is IRRELEVANT for choosing type.
+- Before you pick type, identify the package FORMAT:
+    * rigid rectangular box with cereal-style imagery or a "cereal" / "flakes" / "bran" / "granola" / "oats" word on it → cereal / granola / oatmeal as appropriate.
+    * soft plastic pouch or resealable bag with fruit imagery (berries, raisins, mango, apricots, etc.) → "dried fruit" (NOT cereal), even if it sits on a cereal shelf.
+    * soft bag with nuts / trail mix imagery → "nuts" or "trail mix".
+    * individually wrapped bar → "snack bar" or "candy".
+    * crinkly chip bag → "chips".
+    * can / tin → canned soup/vegetable/fruit/meat as appropriate.
+    * jar → peanut butter / jam / sauce / condiment as appropriate.
+    * bottle/carton with liquid → beverage / milk / juice / water.
+- Use type "cereal" ONLY when the package is a cereal-style box OR bag whose own label imagery or words clearly indicate cereal/flakes/bran/O's. A soft pouch of fruit on a cereal shelf is NOT cereal.
+- category MUST match type: dry, refrigerated, frozen, beverage, produce, hygiene, or other. Dried fruit / nuts / trail mix / cereal / chips / bars / pasta / rice / canned goods are all "dry". Yogurt / cheese / milk / egg are "refrigerated". Frozen meal/fruit/vegetable are "frozen". Soda / juice / water / tea / coffee / plant milk in a beverage container are "beverage".
+
+- description should mention the package FORMAT first (box, pouch, can, jar, bottle, bar wrapper) plus color, imagery, and only label words that you can actually read (e.g. "soft blue pouch with berry illustration; label text too small to read"). Never include invented flavor, brand, or product details.
+- confidence must honestly reflect how readable the label is:
+  * "high": brand AND product name are clearly readable in the image.
+  * "medium": product type is clearly visible but brand or exact name is partial/blurry.
+  * "low": type itself is a guess from shape/color.
+  Never use "high" for an item whose name you had to infer.
+
+Counting rules:
+- One row per DISTINCT product (same brand + same product + same size). Combine all units of that product into a single row.
+- visibleQuantity = the number of units you can directly see in the photo (front-facing units PLUS any back-row units whose tops, corners, or partial labels are visible peeking behind/above the front row).
+- quantity = best-estimate TOTAL number of units stocked, including ones fully hidden behind the visible front row. Pantry shelves are almost always stocked multiple deep — DEFAULT to assuming there are hidden units behind the front row unless the image proves otherwise.
+
+Depth estimation procedure (follow in order):
+  1. Start from the assumption that this is a stocked pantry shelf and rows are typically 2–3 deep.
+  2. Look for positive depth evidence — box tops peeking over the front row, corners/edges of matching packages beside the front row, a back wall that is clearly far behind the front row, or the shelf above/below showing obvious depth. ANY of these = treat the product as at least 2 rows deep. Multiple tops visible = 3 rows deep. Stacks clearly filling to the back wall = assume filled (2–4 rows depending on apparent depth).
+  3. Only reduce below 2 rows when you have NEGATIVE evidence: you can plainly see empty shelf liner behind the front row, the back wall is directly touching the rear of the front-row packages, or a clear gap/daylight between the front row and the back wall with nothing in between.
+  4. If you genuinely cannot tell (shelf is dark, back is occluded, etc.), default to assuming ~2 rows deep rather than 1. Under-counting a well-stocked pantry is worse than slightly over-counting.
+
+- So: quantity = visibleQuantity × estimated number of rows deep. Typical outcomes:
+    * Clear evidence of back-row items → quantity ≈ visibleQuantity × 2 (or 3 if multiple back rows are evident).
+    * No evidence either way on a normally stocked shelf → quantity ≈ visibleQuantity × 2.
+    * Clearly empty behind → quantity = visibleQuantity.
+- quantity MUST be >= visibleQuantity.
+- quantityEstimated = true whenever quantity > visibleQuantity; false only when you have direct evidence nothing is behind.
+- Cap the behind-front-row multiplier at 4 rows deep.
+- When quantity is estimated, briefly note the reasoning in description (e.g. "5 visible in front, matching box tops peek behind → estimated ~10 total (2 rows deep)").
+- quantity and visibleQuantity must be positive integers.
+- size is REQUIRED. If package size/count is not readable, estimate and suffix with "(estimated)".
+
+Location rules:
+- location is required and must be in source-image pixel coordinates.
+- centerX in [0, ${imageWidth}], centerY in [0, ${imageHeight}]. imageWidth/imageHeight must equal ${imageWidth}x${imageHeight}.
+- radius should roughly enclose the single product you detected (not the whole shelf row).
+
+If the shelf contains NO identifiable pantry items, return "inventoryItems": [] and explain why in "notes".
+`.trim();
+}
+
+function ensurePackageDetails(value: unknown) {
+  const text = String(value ?? "").trim();
+  if (text) {
+    return text;
+  }
+
+  return "1 unit (estimated)";
+}
+
+function toFiniteNumber(value: unknown) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function parseLocation(value: unknown): ItemLocation | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  const centerX = toFiniteNumber(record.centerX ?? record.center_x ?? record.cx ?? record.x);
+  const centerY = toFiniteNumber(record.centerY ?? record.center_y ?? record.cy ?? record.y);
+  const radius = toFiniteNumber(record.radius ?? record.r);
+  const imageWidth = toFiniteNumber(
+    record.imageWidth ?? record.image_width ?? record.sourceWidth ?? record.originalWidth
+  );
+  const imageHeight = toFiniteNumber(
+    record.imageHeight ?? record.image_height ?? record.sourceHeight ?? record.originalHeight
+  );
+
+  const normalizedWithoutDimensions =
+    imageWidth == null &&
+    imageHeight == null &&
+    centerX != null &&
+    centerY != null &&
+    radius != null &&
+    centerX >= 0 &&
+    centerX <= 1 &&
+    centerY >= 0 &&
+    centerY <= 1 &&
+    radius > 0 &&
+    radius <= 1;
+
+  if (
+    centerX == null ||
+    centerY == null ||
+    radius == null ||
+    radius <= 0 ||
+    (!normalizedWithoutDimensions && imageWidth == null) ||
+    (!normalizedWithoutDimensions && imageHeight == null) ||
+    (!normalizedWithoutDimensions && imageWidth != null && imageWidth <= 0) ||
+    (!normalizedWithoutDimensions && imageHeight != null && imageHeight <= 0)
+  ) {
+    return null;
+  }
+
+  return {
+    centerX,
+    centerY,
+    radius,
+    imageWidth: normalizedWithoutDimensions ? 1 : (imageWidth as number),
+    imageHeight: normalizedWithoutDimensions ? 1 : (imageHeight as number),
+  };
+}
+
+function normalizeLocationToRealDimensions(
+  location: ItemLocation,
+  realDimensions: ImageDimensions
+): ItemLocation {
+  const declaredWidth = location.imageWidth > 0 ? location.imageWidth : realDimensions.width;
+  const declaredHeight = location.imageHeight > 0 ? location.imageHeight : realDimensions.height;
+
+  const scaleX = realDimensions.width / declaredWidth;
+  const scaleY = realDimensions.height / declaredHeight;
+  const scaleForRadius = Math.max(scaleX, scaleY);
+
+  return {
+    centerX: location.centerX * scaleX,
+    centerY: location.centerY * scaleY,
+    radius: location.radius * scaleForRadius,
+    imageWidth: realDimensions.width,
+    imageHeight: realDimensions.height,
+  };
+}
 
 function parseInventoryJson(raw: string): InventorySnapshot {
-  const sanitized = raw.trim().replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```$/, "").trim();
+  const sanitized = raw
+    .trim()
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/```$/, "")
+    .trim();
+
   const parsed = JSON.parse(sanitized) as Partial<InventorySnapshot>;
 
   const items = Array.isArray(parsed.inventoryItems)
-    ? parsed.inventoryItems.map((item) => ({
-        itemName: String(item?.itemName ?? "Unknown item"),
-        sku:
-          item?.sku == null || String(item?.sku).trim() === ""
-            ? ""
-            : String(item?.sku),
-        brand: String(item?.brand ?? item?.sku ?? "Unknown"),
-        description: String(item?.description ?? ""),
-        packageDetails: String(item?.packageDetails ?? ""),
-        estimatedQuantityVisible: Number.isFinite(Number(item?.estimatedQuantityVisible))
-          ? Math.max(0, Math.round(Number(item?.estimatedQuantityVisible)))
-          : 0,
-        category: String(item?.category ?? "other"),
-        confidence: String(item?.confidence ?? "low"),
-      }))
+    ? parsed.inventoryItems.map((item) => {
+        const record = item as unknown as Record<string, unknown>;
+        const parsedQuantity = Number(
+          record.quantity ?? record.estimatedQuantityVisible ?? 1
+        );
+        const parsedVisibleQuantity = Number(
+          record.visibleQuantity ??
+            record.visible_quantity ??
+            record.estimatedQuantityVisible ??
+            record.quantity ??
+            1
+        );
+
+        const totalQuantity = Number.isFinite(parsedQuantity)
+          ? Math.max(1, Math.round(parsedQuantity))
+          : 1;
+        const visibleQuantity = Number.isFinite(parsedVisibleQuantity)
+          ? Math.max(1, Math.round(parsedVisibleQuantity))
+          : totalQuantity;
+
+        const normalizedVisible = Math.min(visibleQuantity, totalQuantity);
+        const rawEstimatedFlag = record.quantityEstimated;
+        const quantityEstimated =
+          typeof rawEstimatedFlag === "boolean"
+            ? rawEstimatedFlag
+            : totalQuantity > normalizedVisible;
+
+        return {
+          name: String(record.name ?? record.itemName ?? "Unknown item"),
+          sku:
+            record.sku == null || String(record.sku).trim() === ""
+              ? ""
+              : String(record.sku),
+          brand: String(record.brand ?? "").trim(),
+          description: String(record.description ?? "").trim(),
+          size: ensurePackageDetails(record.size ?? record.packageDetails),
+          quantity: totalQuantity,
+          visibleQuantity: normalizedVisible,
+          quantityEstimated,
+          category: String(record.category ?? "other").trim().toLowerCase(),
+          type: String(record.type ?? "").trim().toLowerCase() || "other",
+          confidence: String(record.confidence ?? "low").trim().toLowerCase(),
+          location: parseLocation(record.location),
+        };
+      })
     : [];
 
-  const notes = Array.isArray(parsed.notes)
-    ? parsed.notes.map((note) => String(note))
-    : [];
+  const notes = Array.isArray(parsed.notes) ? parsed.notes.map((note) => String(note)) : [];
 
   return {
     sceneSummary: String(parsed.sceneSummary ?? ""),
@@ -120,17 +339,29 @@ function toBase64Data(file: File): Promise<string> {
   });
 }
 
-function buildPlaceholderPhotoUrl(file: File | null, itemName: string, index: number) {
-  const fileToken = (file?.name || "inventory-photo")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  const itemToken = itemName
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  const now = Date.now();
-  return `https://images.example.com/hub/${fileToken || "photo"}-${itemToken || "item"}-${now}-${index + 1}.jpg`;
+function readImageDimensions(file: File): Promise<ImageDimensions> {
+  return new Promise((resolve, reject) => {
+    const image = new window.Image();
+    const objectUrl = URL.createObjectURL(file);
+
+    image.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+      const width = Number(image.naturalWidth || 0);
+      const height = Number(image.naturalHeight || 0);
+      if (width > 0 && height > 0) {
+        resolve({ width, height });
+        return;
+      }
+      reject(new Error("Could not read image dimensions."));
+    };
+
+    image.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error("Could not load image for dimensions."));
+    };
+
+    image.src = objectUrl;
+  });
 }
 
 async function readApiPayload(response: Response): Promise<{
@@ -143,398 +374,1030 @@ async function readApiPayload(response: Response): Promise<{
   }
 
   try {
-    const parsed = JSON.parse(rawText) as Record<string, unknown>;
-    return { json: parsed, text: rawText };
+    return { json: JSON.parse(rawText) as Record<string, unknown>, text: rawText };
   } catch {
     return { json: null, text: rawText };
   }
 }
 
+async function uploadPhotoToCloudinary(
+  imageBase64: string,
+  mimeType: string,
+  shelfName: string
+) {
+  const uploadResponse = await fetch("/api/cloudinary/upload", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ imageBase64, mimeType, shelfName }),
+  });
+
+  const { json, text } = await readApiPayload(uploadResponse);
+  const payload = (json || {}) as CloudinaryUploadResponse;
+
+  if (!uploadResponse.ok) {
+    const detail = text.trim().startsWith("<!DOCTYPE")
+      ? "Received HTML instead of JSON from Cloudinary upload."
+      : text.slice(0, 160);
+    throw new Error(
+      payload.error || `Cloudinary upload failed (${uploadResponse.status}). ${detail}`
+    );
+  }
+
+  if (!payload.secureUrl) {
+    throw new Error("Cloudinary upload succeeded but did not return a secure URL.");
+  }
+
+  return payload.secureUrl;
+}
+
+function createUploadImageId(file: File, index: number) {
+  return `${file.name}-${file.lastModified}-${index}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+const GENERIC_NAME_PATTERNS: RegExp[] = [
+  /^$/,
+  /^unknown(\s|$)/i,
+  /^other$/i,
+  /^item$/i,
+  /^product$/i,
+  /^cereal$/i,
+  /^chips$/i,
+  /^snack$/i,
+  /^food$/i,
+  /^assorted\b/i,
+];
+
+const HALLUCINATION_SUBSTRINGS: string[] = [
+  "purple maize",
+  "purple corn",
+  "crimson crunch",
+  "mystery cereal",
+  "mystery snack",
+  "rainbow crunch",
+  "magic crunch",
+  "fantasy",
+];
+
+const HALLUCINATION_WORDS: string[] = [
+  "maize",
+];
+
+function nameHasHallucinatedLanguage(name: string) {
+  const lowered = (name || "").toLowerCase();
+  if (!lowered) {
+    return false;
+  }
+  if (HALLUCINATION_SUBSTRINGS.some((token) => lowered.includes(token))) {
+    return true;
+  }
+  return HALLUCINATION_WORDS.some((word) => {
+    const pattern = new RegExp(`\\b${word}\\b`, "i");
+    return pattern.test(lowered);
+  });
+}
+
+function isSuspectDetection(item: {
+  name: string;
+  brand: string;
+  confidence: string;
+}) {
+  const name = (item.name || "").trim();
+  const brand = (item.brand || "").trim();
+  const confidence = (item.confidence || "").trim().toLowerCase();
+
+  if (!name) return true;
+  if (nameHasHallucinatedLanguage(name)) return true;
+  if (GENERIC_NAME_PATTERNS.some((pattern) => pattern.test(name))) {
+    return true;
+  }
+  if (confidence === "low" || confidence === "medium") return true;
+  if (!brand && confidence !== "high") return true;
+
+  return false;
+}
+
+function sanitizeHallucinatedNames(item: RawInventoryItem): RawInventoryItem {
+  const nameIsBad = nameHasHallucinatedLanguage(item.name);
+  const brandIsBad = nameHasHallucinatedLanguage(item.brand);
+
+  if (!nameIsBad && !brandIsBad) {
+    return item;
+  }
+
+  const fallbackType = (item.type || "item").trim() || "item";
+  return {
+    ...item,
+    name: `Unknown ${fallbackType}`,
+    brand: brandIsBad ? "" : item.brand,
+    confidence: "low",
+    description: nameIsBad
+      ? `Label not legible; classified by visible packaging only. ${item.description || ""}`.trim()
+      : item.description,
+  };
+}
+
+const TYPE_KEYWORD_RULES: Array<{
+  type: string;
+  category: string;
+  patterns: RegExp[];
+}> = [
+  {
+    type: "dried fruit",
+    category: "dry",
+    patterns: [
+      /\bdried\s+fruit\b/i,
+      /\bdried\s+(blueberr|strawberr|cranberr|cherr|mango|apricot|fig|pineapple|banana)\w*/i,
+      /\braisin/i,
+      /\bfruit\s+(pouch|bag|mix|medley)\b/i,
+      /\bfruit\s+and\s+nut\b/i,
+    ],
+  },
+  {
+    type: "nuts",
+    category: "dry",
+    patterns: [
+      /\balmond/i,
+      /\bcashew/i,
+      /\bwalnut/i,
+      /\bpistachio/i,
+      /\bpecan/i,
+      /\broasted\s+peanuts?\b/i,
+      /\bmixed\s+nuts?\b/i,
+    ],
+  },
+  {
+    type: "trail mix",
+    category: "dry",
+    patterns: [/\btrail\s+mix\b/i],
+  },
+  {
+    type: "snack bar",
+    category: "dry",
+    patterns: [
+      /\b(granola|protein|energy|breakfast|fiber|fruit|nut)\s+bar\b/i,
+      /\bclif\b/i,
+      /\bkind\s+bar\b/i,
+      /\brx\s*bar\b/i,
+    ],
+  },
+  {
+    type: "chips",
+    category: "dry",
+    patterns: [
+      /\b(potato|tortilla|veggie|pita|kale|plantain)\s+chips?\b/i,
+      /\bcrisps?\b/i,
+    ],
+  },
+  {
+    type: "peanut butter",
+    category: "dry",
+    patterns: [/\bpeanut\s+butter\b/i, /\balmond\s+butter\b/i, /\bnut\s+butter\b/i],
+  },
+  {
+    type: "canned soup",
+    category: "dry",
+    patterns: [/\bcanned?\s+soup\b/i, /\bchicken\s+noodle\s+soup\b/i],
+  },
+  {
+    type: "pasta",
+    category: "dry",
+    patterns: [/\bspaghetti\b/i, /\bpenne\b/i, /\bfusilli\b/i, /\brigatoni\b/i, /\bmacaroni\b/i, /\bpasta\b/i],
+  },
+  {
+    type: "rice",
+    category: "dry",
+    patterns: [/\b(white|brown|jasmine|basmati)\s+rice\b/i, /\brice\s+(bag|pouch)\b/i],
+  },
+];
+
+const BARE_GENERIC_NAME_REGEX = /^(cereal|chips?|snacks?|food|item|product|candy|bars?|pasta|rice)$/i;
+
+function correctObviousTypeMismatches(item: RawInventoryItem): RawInventoryItem {
+  const haystack = `${item.name || ""} ${item.description || ""}`.toLowerCase();
+  if (!haystack.trim()) {
+    return item;
+  }
+
+  for (const rule of TYPE_KEYWORD_RULES) {
+    if (rule.patterns.some((pattern) => pattern.test(haystack))) {
+      if ((item.type || "").toLowerCase() === rule.type && (item.category || "").toLowerCase() === rule.category) {
+        return item;
+      }
+      return {
+        ...item,
+        type: rule.type,
+        category: rule.category,
+      };
+    }
+  }
+
+  return item;
+}
+
+function rewriteBareGenericName(item: RawInventoryItem): RawInventoryItem {
+  const trimmedName = (item.name || "").trim();
+  if (!trimmedName || !BARE_GENERIC_NAME_REGEX.test(trimmedName)) {
+    return item;
+  }
+
+  const fallbackType = (item.type || "item").trim() || "item";
+  const newName = `Unknown ${fallbackType}`;
+  if (newName.toLowerCase() === trimmedName.toLowerCase()) {
+    return item;
+  }
+
+  return {
+    ...item,
+    name: newName,
+    confidence: "low",
+  };
+}
+
+async function cropImageToBase64(
+  file: File,
+  location: ItemLocation,
+  outputSize = 768
+): Promise<{ base64: string; mimeType: string }> {
+  const objectUrl = URL.createObjectURL(file);
+
+  try {
+    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const element = new window.Image();
+      element.onload = () => resolve(element);
+      element.onerror = () => reject(new Error("Could not load image for cropping."));
+      element.src = objectUrl;
+    });
+
+    const naturalWidth = image.naturalWidth || location.imageWidth;
+    const naturalHeight = image.naturalHeight || location.imageHeight;
+    const scaleX = naturalWidth / location.imageWidth;
+    const scaleY = naturalHeight / location.imageHeight;
+
+    const boxRadius = Math.max(location.radius * 1.6, 80);
+    const boxMax = Math.min(naturalWidth, naturalHeight);
+    const cropSize = Math.max(64, Math.min(Math.round(boxRadius * 2 * scaleX), boxMax));
+
+    const centerPxX = location.centerX * scaleX;
+    const centerPxY = location.centerY * scaleY;
+
+    const maxX = Math.max(0, naturalWidth - cropSize);
+    const maxY = Math.max(0, naturalHeight - cropSize);
+    const cropX = Math.max(0, Math.min(maxX, Math.round(centerPxX - cropSize / 2)));
+    const cropY = Math.max(0, Math.min(maxY, Math.round(centerPxY - cropSize / 2)));
+
+    const canvas = document.createElement("canvas");
+    canvas.width = outputSize;
+    canvas.height = outputSize;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      throw new Error("Canvas 2D context is not available for cropping.");
+    }
+    ctx.drawImage(
+      image,
+      cropX,
+      cropY,
+      cropSize,
+      cropSize,
+      0,
+      0,
+      outputSize,
+      outputSize
+    );
+
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.9);
+    const base64 = dataUrl.split(",")[1] || "";
+    if (!base64) {
+      throw new Error("Could not encode cropped image as base64.");
+    }
+
+    return { base64, mimeType: "image/jpeg" };
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+function buildRefinementPrompt() {
+  return `
+You are looking at a tightly cropped image of a SINGLE product from a university food pantry shelf.
+Forget any prior labels — classify this item fresh from what you can actually see.
+
+Return ONLY valid JSON, no markdown, with this exact schema:
+{
+  "name": "string",
+  "brand": "string",
+  "description": "string",
+  "size": "string",
+  "category": "dry|refrigerated|frozen|beverage|produce|hygiene|other",
+  "type": "cereal|granola|oatmeal|chips|crackers|cookies|snack bar|candy|dried fruit|nuts|trail mix|popcorn|pasta|rice|grain|beans|lentils|canned soup|canned vegetable|canned fruit|canned meat|sauce|condiment|peanut butter|jam|bread|tortilla|baking|seasoning|sugar|flour|oil|tea|coffee|juice|soda|water|milk|plant milk|yogurt|cheese|egg|produce|frozen meal|frozen vegetable|frozen fruit|hygiene|toiletry|paper goods|cleaning|other",
+  "confidence": "high|medium|low"
+}
+
+Rules:
+- Only use words you can literally read off the package. If the product name is not legible, the "name" field MUST be exactly "Unknown <type>" (for example "Unknown dried fruit", "Unknown snack bar"). Do not compose plausible product names from colors or shapes.
+- The "name" field must NEVER be a bare category word like "Cereal", "Chips", "Snack", "Food", "Item", or "Product". Use "Unknown <type>" instead.
+- Never combine a visible brand with a guessed product word. Either copy the full readable product name, or fall back to "Unknown <type>".
+- brand: copy verbatim from the label if readable; otherwise "". Never guess a brand.
+- type MUST describe what THIS package physically contains, judged from its format, imagery, and readable words only. Ignore what kind of shelf it came from.
+    * rigid rectangular box with cereal/flakes/bran/granola/O's imagery or wording → cereal / granola / oatmeal.
+    * soft plastic pouch / resealable bag with fruit imagery (berries, raisins, mango, apricots) → "dried fruit" (NOT cereal).
+    * soft bag with nuts or trail mix imagery → nuts / trail mix.
+    * individually wrapped bar → snack bar / candy.
+    * crinkly chip bag → chips.
+    * can/tin → canned soup/vegetable/fruit/meat as appropriate.
+    * jar → peanut butter / jam / sauce / condiment.
+    * bottle/carton of liquid → beverage / milk / juice / water.
+- Use type "cereal" ONLY when the package itself looks like cereal (cereal-style box or bag with cereal imagery/wording). A soft fruit pouch is not cereal even if cropped from a cereal shelf.
+- category MUST match type (dry / refrigerated / frozen / beverage / produce / hygiene / other).
+- description: start with the package format (box, pouch, can, jar, bottle, bar wrapper), then describe colors, imagery, and readable label words only. Do not fabricate flavor or brand details.
+- confidence "high" is allowed ONLY when brand AND full product name are readable.
+- If you are unsure, prefer "Unknown <type>" with low confidence over any guess.
+`.trim();
+}
+
+type RefinementResult = {
+  name: string;
+  brand: string;
+  description: string;
+  size: string;
+  category: string;
+  type: string;
+  confidence: string;
+};
+
+function parseRefinementJson(raw: string): RefinementResult | null {
+  const sanitized = raw
+    .trim()
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/```$/, "")
+    .trim();
+
+  try {
+    const parsed = JSON.parse(sanitized) as Record<string, unknown>;
+    return {
+      name: String(parsed.name ?? "").trim(),
+      brand: String(parsed.brand ?? "").trim(),
+      description: String(parsed.description ?? "").trim(),
+      size: ensurePackageDetails(parsed.size),
+      category: String(parsed.category ?? "other").trim().toLowerCase() || "other",
+      type: String(parsed.type ?? "other").trim().toLowerCase() || "other",
+      confidence: String(parsed.confidence ?? "low").trim().toLowerCase(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function refineDetectedItem(
+  file: File,
+  location: ItemLocation,
+  _previousItem: RawInventoryItem
+): Promise<RefinementResult | null> {
+  void _previousItem;
+  const { base64, mimeType } = await cropImageToBase64(file, location, 768);
+  const response = await fetch("/api/analyze", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      prompt: buildRefinementPrompt(),
+      imageBase64: base64,
+      mimeType,
+      responseMimeType: "application/json",
+    }),
+  });
+
+  const { json, text } = await readApiPayload(response);
+  const payload = (json || {}) as AnalyzeResponse;
+
+  if (!response.ok) {
+    const detail = text.trim().startsWith("<!DOCTYPE")
+      ? "Received HTML instead of JSON from refinement analyzer."
+      : text.slice(0, 160);
+    throw new Error(payload.error || `Refinement failed (${response.status}). ${detail}`);
+  }
+
+  return parseRefinementJson(payload.text || "");
+}
+
+function confidenceRank(value: string): number {
+  const lowered = (value || "").trim().toLowerCase();
+  if (lowered === "high") return 3;
+  if (lowered === "medium") return 2;
+  if (lowered === "low") return 1;
+  return 0;
+}
+
+function mergeRefinedItem(
+  original: RawInventoryItem,
+  refined: RefinementResult
+): { item: RawInventoryItem; improved: boolean } {
+  const originalNameWasBad = nameHasHallucinatedLanguage(original.name);
+  const refinedNameIsBad = nameHasHallucinatedLanguage(refined.name);
+  const refinedNameIsUsable =
+    Boolean(refined.name) &&
+    !GENERIC_NAME_PATTERNS.some((r) => r.test(refined.name)) &&
+    !refinedNameIsBad;
+  const refinedBrandIsReadable = Boolean(refined.brand) && !nameHasHallucinatedLanguage(refined.brand);
+
+  const originalRank = confidenceRank(original.confidence);
+  const refinedRank = confidenceRank(refined.confidence);
+
+  if (originalNameWasBad) {
+    return {
+      item: {
+        ...original,
+        name: refinedNameIsUsable ? refined.name : `Unknown ${refined.type || original.type || "item"}`,
+        brand: refinedBrandIsReadable ? refined.brand : "",
+        description: refined.description || "Label not legible; classified by visible packaging only.",
+        size: refined.size || original.size,
+        category: refined.category || original.category,
+        type: refined.type || original.type,
+        confidence: refinedNameIsUsable && refinedBrandIsReadable ? refined.confidence : "low",
+      },
+      improved: true,
+    };
+  }
+
+  const shouldAdoptRefined =
+    refinedRank >= originalRank && (refinedNameIsUsable || refinedBrandIsReadable);
+
+  if (!shouldAdoptRefined) {
+    return { item: original, improved: false };
+  }
+
+  return {
+    item: {
+      ...original,
+      name: refinedNameIsUsable ? refined.name : original.name,
+      brand: refinedBrandIsReadable ? refined.brand : original.brand,
+      description: refined.description || original.description,
+      size: refined.size || original.size,
+      category: refined.category || original.category,
+      type: refined.type || original.type,
+      confidence: refined.confidence || original.confidence,
+    },
+    improved: true,
+  };
+}
+
+async function analyzeOneImage(file: File, shelfName: string): Promise<AnalyzeOneResult> {
+  const dimensions = await readImageDimensions(file);
+  const imageBase64 = await toBase64Data(file);
+
+  const analyzeResponse = await fetch("/api/analyze", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      prompt: buildInventoryPrompt(dimensions.width, dimensions.height),
+      imageBase64,
+      mimeType: file.type || "image/jpeg",
+      responseMimeType: "application/json",
+    }),
+  });
+
+  const { json, text } = await readApiPayload(analyzeResponse);
+  const payload = (json || {}) as AnalyzeResponse;
+
+  if (!analyzeResponse.ok) {
+    const detail = text.trim().startsWith("<!DOCTYPE")
+      ? "Received HTML instead of JSON from analyzer."
+      : text.slice(0, 160);
+    throw new Error(payload.error || `Analyzer failed (${analyzeResponse.status}). ${detail}`);
+  }
+
+  const snapshot = parseInventoryJson(payload.text || "");
+
+  if (!snapshot.inventoryItems.length) {
+    return { rows: [], detectedCount: 0, notes: snapshot.notes };
+  }
+
+  const refinedItems: RawInventoryItem[] = [];
+  const refinementNotes: string[] = [];
+  let refinedCount = 0;
+
+  for (const item of snapshot.inventoryItems) {
+    if (!isSuspectDetection(item) || !item.location) {
+      refinedItems.push(item);
+      continue;
+    }
+
+    const scaledLocation = normalizeLocationToRealDimensions(item.location, dimensions);
+
+    try {
+      const refined = await refineDetectedItem(file, scaledLocation, item);
+      if (refined) {
+        const { item: merged, improved } = mergeRefinedItem(item, refined);
+        refinedItems.push(merged);
+        if (improved) {
+          refinedCount += 1;
+        }
+      } else {
+        refinedItems.push(item);
+      }
+    } catch (refineError) {
+      const message =
+        refineError instanceof Error ? refineError.message : "unknown error";
+      refinementNotes.push(
+        `Could not re-verify "${item.name || "an item"}" — ${message}`
+      );
+      refinedItems.push(item);
+    }
+  }
+
+  const shelfPhotoUrl = await uploadPhotoToCloudinary(
+    imageBase64,
+    file.type || "image/jpeg",
+    shelfName
+  );
+
+  const hallucinationSanitized = refinedItems.map(sanitizeHallucinatedNames);
+  const sanitizedCount = hallucinationSanitized.reduce(
+    (count, item, index) => count + (item === refinedItems[index] ? 0 : 1),
+    0
+  );
+
+  const typeCorrected = hallucinationSanitized.map(correctObviousTypeMismatches);
+  const typeCorrectedCount = typeCorrected.reduce(
+    (count, item, index) => count + (item === hallucinationSanitized[index] ? 0 : 1),
+    0
+  );
+
+  const sanitizedItems = typeCorrected.map(rewriteBareGenericName);
+  const genericNameRewriteCount = sanitizedItems.reduce(
+    (count, item, index) => count + (item === typeCorrected[index] ? 0 : 1),
+    0
+  );
+
+  let estimatedQuantityCount = 0;
+  let extraUnitsBehindFront = 0;
+
+  const rows = sanitizedItems.map((item) => {
+    const location = item.location
+      ? normalizeLocationToRealDimensions(item.location, dimensions)
+      : null;
+
+    const totalQuantity = Math.max(1, item.quantity || 1);
+    const visibleQuantity = Math.min(
+      totalQuantity,
+      Math.max(1, item.visibleQuantity || 1)
+    );
+    const quantityIsEstimated =
+      item.quantityEstimated && totalQuantity > visibleQuantity;
+
+    if (quantityIsEstimated) {
+      estimatedQuantityCount += 1;
+      extraUnitsBehindFront += totalQuantity - visibleQuantity;
+    }
+
+    const descriptionMentionsEstimate = /estimate|behind|back row|stacked/i.test(
+      item.description || ""
+    );
+
+    const enrichedDescription = quantityIsEstimated && !descriptionMentionsEstimate
+      ? `${item.description ? item.description + " " : ""}Estimated total ${totalQuantity} units (${visibleQuantity} visible in front, ~${totalQuantity - visibleQuantity} inferred behind).`.trim()
+      : item.description;
+
+    return {
+      sku: item.sku || null,
+      shelfId: null,
+      name: item.name,
+      brand: item.brand,
+      quantity: totalQuantity,
+      size: item.size,
+      category: item.category,
+      type: item.type,
+      description: enrichedDescription,
+      photoUrl: shelfPhotoUrl,
+      locationCenterX: location?.centerX ?? null,
+      locationCenterY: location?.centerY ?? null,
+      locationRadius: location?.radius ?? null,
+      imageWidth: location?.imageWidth ?? null,
+      imageHeight: location?.imageHeight ?? null,
+    };
+  });
+
+  const combinedNotes = snapshot.notes.slice();
+  if (refinedCount > 0) {
+    combinedNotes.push(`Re-verified ${refinedCount} uncertain item${refinedCount === 1 ? "" : "s"} with a tighter crop.`);
+  }
+  if (sanitizedCount > 0) {
+    combinedNotes.push(
+      `Rewrote ${sanitizedCount} item name${sanitizedCount === 1 ? "" : "s"} that looked fabricated as "Unknown <type>".`
+    );
+  }
+  if (typeCorrectedCount > 0) {
+    combinedNotes.push(
+      `Corrected type/category for ${typeCorrectedCount} item${typeCorrectedCount === 1 ? "" : "s"} whose name or description clearly indicated a different product class (e.g. dried fruit mislabeled as cereal).`
+    );
+  }
+  if (genericNameRewriteCount > 0) {
+    combinedNotes.push(
+      `Rewrote ${genericNameRewriteCount} bare generic name${genericNameRewriteCount === 1 ? "" : "s"} (like "Cereal") to "Unknown <type>".`
+    );
+  }
+  if (estimatedQuantityCount > 0) {
+    combinedNotes.push(
+      `Estimated ${extraUnitsBehindFront} extra unit${extraUnitsBehindFront === 1 ? "" : "s"} stacked behind the front row across ${estimatedQuantityCount} product${estimatedQuantityCount === 1 ? "" : "s"}.`
+    );
+  }
+  combinedNotes.push(...refinementNotes);
+
+  return {
+    rows,
+    detectedCount: sanitizedItems.length,
+    notes: combinedNotes,
+  };
+}
+
 export default function InventoryPage() {
-  const [imageFile, setImageFile] = useState<File | null>(null);
-  const [imagePreview, setImagePreview] = useState("");
-  const [snapshot, setSnapshot] = useState<InventorySnapshot>(EMPTY_SNAPSHOT);
-  const [error, setError] = useState("");
-  const [status, setStatus] = useState("");
-  const [isProcessing, setIsProcessing] = useState(false);
+  const [selectedImages, setSelectedImages] = useState<SelectedUploadImage[]>([]);
   const [shelfName, setShelfName] = useState("");
   const [shelfLocationDescription, setShelfLocationDescription] = useState("");
-  const [isCameraOpen, setIsCameraOpen] = useState(false);
-  const [isStartingCamera, setIsStartingCamera] = useState(false);
-  const [cameraError, setCameraError] = useState("");
+  const [statusMessage, setStatusMessage] = useState("");
+  const [errorMessage, setErrorMessage] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [batchNotes, setBatchNotes] = useState<string[]>([]);
+  const [replaceExistingInventory, setReplaceExistingInventory] = useState(true);
 
-  const cameraInputRef = useRef<HTMLInputElement>(null);
   const uploadInputRef = useRef<HTMLInputElement>(null);
-  const cameraVideoRef = useRef<HTMLVideoElement>(null);
-  const cameraStreamRef = useRef<MediaStream | null>(null);
+  const selectedImagesRef = useRef<SelectedUploadImage[]>([]);
 
-  const stopCameraStream = () => {
-    const stream = cameraStreamRef.current;
-    if (stream) {
-      stream.getTracks().forEach((track) => track.stop());
-      cameraStreamRef.current = null;
-    }
-
-    if (cameraVideoRef.current) {
-      cameraVideoRef.current.srcObject = null;
-    }
-  };
-
-  const closeCamera = () => {
-    stopCameraStream();
-    setIsCameraOpen(false);
-    setIsStartingCamera(false);
-  };
-
-  const setSelectedImage = (file: File | null) => {
-    setImageFile(file);
-    setSnapshot(EMPTY_SNAPSHOT);
-    setStatus("");
-    setError("");
-
-    if (!file) {
-      setImagePreview("");
-      return;
-    }
-
-    const previewUrl = URL.createObjectURL(file);
-    setImagePreview(previewUrl);
-  };
+  useEffect(() => {
+    selectedImagesRef.current = selectedImages;
+  }, [selectedImages]);
 
   useEffect(() => {
     return () => {
-      if (imagePreview) {
-        URL.revokeObjectURL(imagePreview);
-      }
-    };
-  }, [imagePreview]);
-
-  useEffect(() => {
-    return () => {
-      stopCameraStream();
+      selectedImagesRef.current.forEach((image) => {
+        URL.revokeObjectURL(image.previewUrl);
+      });
     };
   }, []);
 
-  const onImageChange = (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0] ?? null;
-    setSelectedImage(file);
-    closeCamera();
-  };
-
-  const onTakePhoto = async () => {
-    setCameraError("");
-
-    if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
-      cameraInputRef.current?.click();
+  const addFiles = (files: File[]) => {
+    const imageFiles = files.filter((file) => file.type.startsWith("image/"));
+    if (!imageFiles.length) {
       return;
     }
 
-    setIsStartingCamera(true);
+    setErrorMessage("");
+    setStatusMessage("");
 
-    try {
-      stopCameraStream();
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: "environment" },
-        },
-        audio: false,
-      });
-
-      cameraStreamRef.current = stream;
-      setIsCameraOpen(true);
-
-      requestAnimationFrame(() => {
-        if (!cameraVideoRef.current) {
-          return;
-        }
-
-        cameraVideoRef.current.srcObject = stream;
-        void cameraVideoRef.current.play().catch(() => {
-          setCameraError(
-            "Camera started but preview could not autoplay. Tap Capture if preview remains blank."
-          );
-        });
-      });
-    } catch {
-      setCameraError("Could not access camera. Use Upload Existing Photo instead.");
-      cameraInputRef.current?.click();
-    } finally {
-      setIsStartingCamera(false);
-    }
+    setSelectedImages((previous) => {
+      const startIndex = previous.length;
+      const additions = imageFiles.map((file, offset) => ({
+        id: createUploadImageId(file, startIndex + offset),
+        file,
+        previewUrl: URL.createObjectURL(file),
+        status: "pending" as UploadImageStatus,
+        detectedCount: 0,
+        errorMessage: null,
+      }));
+      return [...previous, ...additions];
+    });
   };
 
-  const onUploadPhoto = () => {
-    closeCamera();
+  const onImagesChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files || []);
+    addFiles(files);
+    event.target.value = "";
+  };
+
+  const onOpenFilePicker = () => {
     uploadInputRef.current?.click();
   };
 
-  const onCaptureFromCamera = async () => {
-    const video = cameraVideoRef.current;
-    if (!video) {
-      setCameraError("Camera preview is not ready yet.");
-      return;
-    }
-
-    const width = video.videoWidth || 1280;
-    const height = video.videoHeight || 720;
-    const canvas = document.createElement("canvas");
-    canvas.width = width;
-    canvas.height = height;
-
-    const context = canvas.getContext("2d");
-    if (!context) {
-      setCameraError("Could not capture camera frame.");
-      return;
-    }
-
-    context.drawImage(video, 0, 0, width, height);
-
-    const blob = await new Promise<Blob | null>((resolve) => {
-      canvas.toBlob(resolve, "image/jpeg", 0.92);
+  const onRemoveImage = (id: string) => {
+    setSelectedImages((previous) => {
+      const target = previous.find((image) => image.id === id);
+      if (target) {
+        URL.revokeObjectURL(target.previewUrl);
+      }
+      return previous.filter((image) => image.id !== id);
     });
-
-    if (!blob) {
-      setCameraError("Could not generate image from camera capture.");
-      return;
-    }
-
-    const file = new File([blob], `inventory-camera-${Date.now()}.jpg`, {
-      type: "image/jpeg",
-    });
-
-    setSelectedImage(file);
-    closeCamera();
   };
 
-  const onProcessAndSave = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setError("");
-    setSnapshot(EMPTY_SNAPSHOT);
-    setStatus("");
+  const onClearAll = () => {
+    setSelectedImages((previous) => {
+      previous.forEach((image) => URL.revokeObjectURL(image.previewUrl));
+      return [];
+    });
+    setStatusMessage("");
+    setErrorMessage("");
+    setBatchNotes([]);
+  };
 
-    if (!imageFile) {
-      setError("Upload an inventory photo first.");
+  const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setErrorMessage("");
+    setStatusMessage("");
+    setBatchNotes([]);
+
+    if (!selectedImages.length) {
+      setErrorMessage("Upload one or more images first.");
       return;
     }
 
     if (!shelfName.trim()) {
-      setError("Enter a shelf group name so this upload is linked to a shelf.");
+      setErrorMessage("Shelf group name is required.");
       return;
     }
 
-    setIsProcessing(true);
-    try {
-      const imageBase64 = await toBase64Data(imageFile);
-      const analyzeResponse = await fetch("/api/analyze", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          prompt: DEFAULT_INVENTORY_PROMPT,
-          imageBase64,
-          mimeType: imageFile.type,
-          responseMimeType: "application/json",
-        }),
-      });
+    setIsSubmitting(true);
+    setSelectedImages((previous) =>
+      previous.map((image) => ({
+        ...image,
+        status: "pending",
+        detectedCount: 0,
+        errorMessage: null,
+      }))
+    );
 
-      const { json: analyzeJson, text: analyzeText } = await readApiPayload(analyzeResponse);
-      const analyzePayload = (analyzeJson || {}) as AnalyzeResponse;
-      if (!analyzeResponse.ok) {
-        throw new Error(
-          analyzePayload.error ||
-            `Inventory parsing failed (${analyzeResponse.status}). ${
-              analyzeText ? analyzeText.slice(0, 160) : ""
-            }`
+    const imagesSnapshot = [...selectedImagesRef.current];
+    const rowsForSave: Array<Record<string, unknown>> = [];
+    const notes: string[] = [];
+
+    let processedCount = 0;
+    let failedCount = 0;
+
+    try {
+      for (const selected of imagesSnapshot) {
+        processedCount += 1;
+
+        setStatusMessage(
+          `Analyzing ${processedCount}/${imagesSnapshot.length}: ${selected.file.name} (uncertain items will be re-verified with a tighter crop)`
         );
+
+        setSelectedImages((previous) =>
+          previous.map((image) =>
+            image.id === selected.id ? { ...image, status: "processing" } : image
+          )
+        );
+
+        try {
+          const analyzed = await analyzeOneImage(selected.file, shelfName.trim());
+          rowsForSave.push(...analyzed.rows);
+          notes.push(...analyzed.notes.map((note) => `${selected.file.name}: ${note}`));
+
+          setSelectedImages((previous) =>
+            previous.map((image) =>
+              image.id === selected.id
+                ? {
+                    ...image,
+                    status: "done",
+                    detectedCount: analyzed.detectedCount,
+                    errorMessage: null,
+                  }
+                : image
+            )
+          );
+        } catch (imageError) {
+          failedCount += 1;
+          const message =
+            imageError instanceof Error
+              ? imageError.message
+              : "Unexpected error while processing this image.";
+
+          setSelectedImages((previous) =>
+            previous.map((image) =>
+              image.id === selected.id
+                ? {
+                    ...image,
+                    status: "error",
+                    errorMessage: message,
+                    detectedCount: 0,
+                  }
+                : image
+            )
+          );
+        }
       }
 
-      const rawText = analyzePayload.text || "";
-      const parsedSnapshot = parseInventoryJson(rawText);
-      setSnapshot(parsedSnapshot);
-
-      if (!parsedSnapshot.inventoryItems.length) {
-        setStatus("No inventory items detected in this photo.");
+      if (!rowsForSave.length) {
+        setErrorMessage("No inventory items were detected. Nothing was added.");
+        setBatchNotes(notes);
         return;
       }
 
+      let clearedCount = 0;
+      if (replaceExistingInventory) {
+        setStatusMessage("Clearing existing inventory before replacement...");
+        const deleteResponse = await fetch(
+          "/api/dataconnect/inventory-items?scope=all",
+          { method: "DELETE" }
+        );
+        const { json: deleteJson, text: deleteText } = await readApiPayload(deleteResponse);
+        const deletePayload = (deleteJson || {}) as {
+          deletedCount?: number;
+          error?: string;
+        };
+        if (!deleteResponse.ok) {
+          const detail = deleteText.trim().startsWith("<!DOCTYPE")
+            ? "Received HTML instead of JSON while clearing inventory."
+            : deleteText.slice(0, 160);
+          throw new Error(
+            deletePayload.error ||
+              `Clear existing inventory failed (${deleteResponse.status}). ${detail}`
+          );
+        }
+        clearedCount = Number(deletePayload.deletedCount ?? 0);
+      }
+
+      setStatusMessage(`Saving ${rowsForSave.length} detected item rows to inventory...`);
+
       const saveResponse = await fetch("/api/dataconnect/inventory-items", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           shelfName: shelfName.trim(),
           shelfLocationDescription: shelfLocationDescription.trim() || undefined,
-          items: parsedSnapshot.inventoryItems.map((item, index) => ({
-            sku: item.sku || null,
-            shelfId: null,
-            name: item.itemName,
-            brand: item.brand,
-            quantity: item.estimatedQuantityVisible,
-            "package-size": item.packageDetails,
-            category: item.category,
-            description: item.description,
-            photoUrl: buildPlaceholderPhotoUrl(imageFile, item.itemName, index),
-          })),
+          items: rowsForSave,
         }),
       });
 
       const { json: saveJson, text: saveText } = await readApiPayload(saveResponse);
-      const savePayload = (saveJson || {}) as {
-        savedCount?: number;
-        shelf?: {
-          id?: string;
-          name?: string | null;
-        };
-        error?: string;
-      };
+      const savePayload = (saveJson || {}) as SaveInventoryResponse;
 
       if (!saveResponse.ok) {
-        const details = saveText.trim().startsWith("<!DOCTYPE")
-          ? "Received HTML instead of JSON. Check API deployment."
+        const detail = saveText.trim().startsWith("<!DOCTYPE")
+          ? "Received HTML instead of JSON while saving inventory."
           : saveText.slice(0, 160);
-        throw new Error(
-          savePayload.error ||
-            `Failed to save inventory (${saveResponse.status}). ${details}`
-        );
+        throw new Error(savePayload.error || `Save failed (${saveResponse.status}). ${detail}`);
       }
 
-      const savedShelfName = savePayload.shelf?.name || shelfName;
-      setStatus(
-        `Saved ${savePayload.savedCount ?? 0} inventory rows to shelf "${savedShelfName}".`
+      const requestedCount = savePayload.metadata?.requestedCount ?? rowsForSave.length;
+      const withLocationCount =
+        savePayload.metadata?.withLocationCount ??
+        rowsForSave.filter(
+          (row) =>
+            row.locationCenterX !== null &&
+            row.locationCenterX !== undefined &&
+            row.locationCenterY !== null &&
+            row.locationCenterY !== undefined &&
+            row.locationRadius !== null &&
+            row.locationRadius !== undefined
+        ).length;
+
+      const savedCount = Number(savePayload.savedCount ?? rowsForSave.length);
+      const persistenceMode = savePayload.metadata?.persistenceMode || "unknown";
+
+      const replacementSummary = replaceExistingInventory
+        ? `Cleared ${clearedCount} previous item${clearedCount === 1 ? "" : "s"} then added ${savedCount}`
+        : `Added ${savedCount}`;
+
+      setStatusMessage(
+        `${replacementSummary} item row${savedCount === 1 ? "" : "s"} from ${imagesSnapshot.length} image${imagesSnapshot.length === 1 ? "" : "s"}. Failed images: ${failedCount}. Metadata on ${withLocationCount}/${requestedCount} rows. Persistence mode: ${persistenceMode}.`
       );
+      setBatchNotes(notes);
     } catch (submitError) {
-      setError(
+      setErrorMessage(
         submitError instanceof Error
           ? submitError.message
-          : "Unexpected error while parsing this inventory photo."
+          : "Unexpected error while adding inventory."
       );
     } finally {
-      setIsProcessing(false);
+      setIsSubmitting(false);
     }
   };
 
   return (
-    <div className="min-h-screen bg-slate-100 px-4 py-8 text-slate-900 md:px-8">
-      <main className="mx-auto w-full max-w-6xl rounded-2xl border border-slate-200 bg-white p-5 shadow-sm md:p-8">
-        <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+    <div className="min-h-screen bg-stone-50 px-4 py-8 text-slate-900 md:px-8">
+      <main className="mx-auto w-full max-w-5xl space-y-5">
+        <header className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-              Admin Inventory Scanner
+            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+              Admin · Inventory
             </p>
             <h1 className="mt-1 text-2xl font-semibold tracking-tight text-slate-900 md:text-3xl">
-              Capture Shelf Photo and Save to Database
+              AI Shelf Inventory Uploader
             </h1>
+            <p className="mt-1 text-sm text-slate-600">
+              Upload images and add detected items to inventory.
+            </p>
           </div>
-          <Link
-            href="/"
-            className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
-          >
-            Back to Homepage
-          </Link>
-        </div>
+          <div className="flex gap-2">
+            <Link
+              href="/admin"
+              className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+            >
+              Admin Home
+            </Link>
+            <Link
+              href="/"
+              className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+            >
+              Back Home
+            </Link>
+          </div>
+        </header>
 
-        <p className="mb-6 max-w-4xl text-sm text-slate-600 md:text-base">
-          Simple workflow: take a photo, detect inventory items, and save them to the database in one step.
-        </p>
+        {errorMessage ? (
+          <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+            {errorMessage}
+          </p>
+        ) : null}
 
-        <form className="grid gap-6 xl:grid-cols-[1fr_1.1fr]" onSubmit={onProcessAndSave}>
-          <section className="space-y-4 rounded-xl border border-slate-200 bg-white p-4">
-            <label className="block text-sm font-semibold text-slate-700">
-              Inventory image
+        {statusMessage ? (
+          <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+            {statusMessage}
+          </p>
+        ) : null}
+
+        <form onSubmit={onSubmit} className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="grid gap-3 md:grid-cols-2">
+            <label className="text-sm font-medium text-slate-700">
+              Shelf group name
+              <input
+                type="text"
+                value={shelfName}
+                onChange={(event) => setShelfName(event.target.value)}
+                placeholder="e.g. Dry Shelf - Week 4"
+                className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-500/20"
+                required
+              />
             </label>
-            <div className="grid gap-2 sm:grid-cols-2">
-              <button
-                type="button"
-                onClick={onTakePhoto}
-                disabled={isStartingCamera}
-                className="inline-flex w-full items-center justify-center rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {isStartingCamera ? "Opening Camera..." : "Take Photo"}
-              </button>
-              <button
-                type="button"
-                onClick={onUploadPhoto}
-                className="inline-flex w-full items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-              >
-                Upload Existing Photo
-              </button>
+
+            <label className="text-sm font-medium text-slate-700">
+              Shelf location (optional)
+              <input
+                type="text"
+                value={shelfLocationDescription}
+                onChange={(event) => setShelfLocationDescription(event.target.value)}
+                placeholder="e.g. Back wall, aisle 2"
+                className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-500/20"
+              />
+            </label>
+          </div>
+
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm font-semibold text-slate-700">
+                Images ({selectedImages.length})
+              </p>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={onOpenFilePicker}
+                  className="rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-semibold text-white transition hover:bg-slate-800"
+                >
+                  Upload images
+                </button>
+                <button
+                  type="button"
+                  onClick={onClearAll}
+                  disabled={!selectedImages.length || isSubmitting}
+                  className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Clear all
+                </button>
+              </div>
             </div>
 
             <input
-              id="inventory-image"
-              ref={cameraInputRef}
-              type="file"
-              accept="image/*"
-              capture="environment"
-              onChange={onImageChange}
-              className="hidden"
-            />
-            <input
-              id="inventory-image-upload"
               ref={uploadInputRef}
               type="file"
               accept="image/*"
-              onChange={onImageChange}
+              multiple
+              onChange={onImagesChange}
               className="hidden"
             />
-            <p className="text-xs text-slate-400">
-              On desktop this opens your webcam preview. On mobile it opens your camera. Captures are used in-app only and are not downloaded to your device.
-            </p>
 
-            {cameraError ? (
-              <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
-                {cameraError}
-              </p>
-            ) : null}
-
-            {isCameraOpen ? (
-              <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
-                <video
-                  ref={cameraVideoRef}
-                  autoPlay
-                  playsInline
-                  muted
-                  className="h-64 w-full rounded-lg bg-black object-cover"
-                />
-                <div className="grid gap-2 sm:grid-cols-2">
-                  <button
-                    type="button"
-                    onClick={onCaptureFromCamera}
-                    className="inline-flex w-full items-center justify-center rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-700"
+            <div className="mt-3 space-y-2">
+              {selectedImages.length ? (
+                selectedImages.map((selected, index) => (
+                  <article
+                    key={selected.id}
+                    className="flex items-center gap-3 rounded-lg border border-slate-200 bg-white p-2"
                   >
-                    Capture Photo
-                  </button>
-                  <button
-                    type="button"
-                    onClick={closeCamera}
-                    className="inline-flex w-full items-center justify-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-                  >
-                    Cancel Camera
-                  </button>
-                </div>
-              </div>
-            ) : null}
+                    <Image
+                      src={selected.previewUrl}
+                      alt={`${selected.file.name} preview`}
+                      width={72}
+                      height={72}
+                      unoptimized
+                      className="h-16 w-16 rounded-md border border-slate-200 object-cover"
+                    />
 
-            <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
-              {imagePreview ? (
-                <Image
-                  src={imagePreview}
-                  alt="Inventory photo preview"
-                  width={1300}
-                  height={1300}
-                  unoptimized
-                  className="h-80 w-full object-contain"
-                />
-              ) : (
-                <div className="flex h-80 items-center justify-center px-6 text-center text-sm text-slate-500">
-                  Take or upload a shelf, fridge, or pantry photo to preview it here.
-                </div>
-              )}
-            </div>
-          </section>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium text-slate-900">
+                        {index + 1}. {selected.file.name}
+                      </p>
+                      <p className="text-xs text-slate-500">
+                        {(selected.file.size / 1024 / 1024).toFixed(2)} MB
+                      </p>
+                      <p className="text-xs text-slate-500">
+                        {selected.status === "pending" ? "Waiting" : null}
+                        {selected.status === "processing" ? "Processing..." : null}
+                        {selected.status === "done"
+                          ? `Done · ${selected.detectedCount} detected`
+                          : null}
+                        {selected.status === "error"
+                          ? `Failed${selected.errorMessage ? ` · ${selected.errorMessage}` : ""}`
+                          : null}
+                      </p>
+                    </div>
 
+<<<<<<< HEAD
           <section className="space-y-4 rounded-xl border border-slate-200 bg-white p-4">
             <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
               Uses your configured server Gemini key and a fixed parser prompt.
@@ -676,10 +1539,77 @@ export default function InventoryPage() {
                 </div>
               ) : null}
                 </>
+=======
+                    <button
+                      type="button"
+                      onClick={() => onRemoveImage(selected.id)}
+                      disabled={isSubmitting}
+                      className="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      Remove
+                    </button>
+                  </article>
+                ))
+              ) : (
+                <p className="rounded-lg border border-dashed border-slate-200 bg-white px-3 py-6 text-center text-sm text-slate-500">
+                  No images yet. Upload one or more shelf photos.
+                </p>
+>>>>>>> main
               )}
             </div>
-          </section>
+          </div>
+
+          <label
+            className={`flex items-start gap-3 rounded-xl border px-4 py-3 text-sm transition ${
+              replaceExistingInventory
+                ? "border-rose-200 bg-rose-50 text-rose-800"
+                : "border-slate-200 bg-slate-50 text-slate-700"
+            }`}
+          >
+            <input
+              type="checkbox"
+              checked={replaceExistingInventory}
+              onChange={(event) => setReplaceExistingInventory(event.target.checked)}
+              disabled={isSubmitting}
+              className="mt-0.5 h-4 w-4 cursor-pointer accent-rose-600 disabled:cursor-not-allowed"
+            />
+            <span className="flex-1">
+              <span className="block text-sm font-semibold">
+                Replace existing inventory
+              </span>
+              <span className="block text-xs">
+                {replaceExistingInventory
+                  ? "All current inventory will be deleted before the new items are saved. This cannot be undone."
+                  : "Existing items will stay. The detected items will be added alongside them."}
+              </span>
+            </span>
+          </label>
+
+          <button
+            type="submit"
+            disabled={isSubmitting || !selectedImages.length || !shelfName.trim()}
+            className="inline-flex w-full items-center justify-center rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isSubmitting
+              ? replaceExistingInventory
+                ? "Clearing inventory and uploading..."
+                : "Uploading and adding inventory..."
+              : replaceExistingInventory
+                ? "Replace Inventory with These Images"
+                : "Upload Images and Add to Inventory"}
+          </button>
         </form>
+
+        {batchNotes.length ? (
+          <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <h2 className="text-sm font-semibold text-slate-800">Analyzer notes</h2>
+            <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-slate-700">
+              {batchNotes.map((note, index) => (
+                <li key={`${note}-${index}`}>{note}</li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
       </main>
     </div>
   );
