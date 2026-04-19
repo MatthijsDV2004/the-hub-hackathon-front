@@ -21,6 +21,19 @@ const nextConfig: NextConfig = {
       process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID ||
       "",
   },
+  async headers() {
+    return [
+      {
+        source: "/(.*)",
+        headers: [
+          {
+            key: "Cross-Origin-Opener-Policy",
+            value: "same-origin-allow-popups",
+          },
+        ],
+      },
+    ];
+  },
   images: {
     remotePatterns: [
       {

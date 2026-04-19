@@ -112,11 +112,25 @@ Schema:
 
 Identification rules (STRICT):
 - Only use words you can literally read off the package. If the label text is not legible, the name MUST be exactly "Unknown <type>" (for example "Unknown dried fruit", "Unknown cereal", "Unknown snack bar"). Do not compose plausible-sounding product names from colors, shapes, or adjacent items.
+- The "name" field must NEVER be a bare category word like "Cereal", "Chips", "Snack", "Food", "Item", or "Product". Those are types, not names. If you cannot read a real product name, use "Unknown <type>" instead.
 - Never combine a real brand with an invented product word (e.g. a brand logo plus a guessed flavor is NOT allowed). Either copy the full product name verbatim, or fall back to "Unknown <type>".
 - brand MUST be copied verbatim from the package if visible; otherwise set brand to "" (empty string). Never guess a brand.
-- type MUST reflect what THIS package actually contains, not what is common on the surrounding shelf. A bag of dried fruit on a cereal shelf is type "dried fruit", not "cereal". A protein bar near cereal is "snack bar".
-- category MUST match type (e.g. dried fruit => "dry", yogurt => "refrigerated", frozen meal => "frozen", juice => "beverage", toiletry => "hygiene").
-- description should mention color, shape, and only label words that you can actually read (e.g. "blue plastic pouch, small; label too blurry to read"). Never include invented flavor, brand, or product details.
+
+Type classification rules (CRITICAL — do NOT let shelf context override package content):
+- type MUST describe what is physically inside THIS package, judged from THIS package's shape, material, imagery, and readable words. Shelf context (what's next to it, what the shelf is "usually" stocked with) is IRRELEVANT for choosing type.
+- Before you pick type, identify the package FORMAT:
+    * rigid rectangular box with cereal-style imagery or a "cereal" / "flakes" / "bran" / "granola" / "oats" word on it → cereal / granola / oatmeal as appropriate.
+    * soft plastic pouch or resealable bag with fruit imagery (berries, raisins, mango, apricots, etc.) → "dried fruit" (NOT cereal), even if it sits on a cereal shelf.
+    * soft bag with nuts / trail mix imagery → "nuts" or "trail mix".
+    * individually wrapped bar → "snack bar" or "candy".
+    * crinkly chip bag → "chips".
+    * can / tin → canned soup/vegetable/fruit/meat as appropriate.
+    * jar → peanut butter / jam / sauce / condiment as appropriate.
+    * bottle/carton with liquid → beverage / milk / juice / water.
+- Use type "cereal" ONLY when the package is a cereal-style box OR bag whose own label imagery or words clearly indicate cereal/flakes/bran/O's. A soft pouch of fruit on a cereal shelf is NOT cereal.
+- category MUST match type: dry, refrigerated, frozen, beverage, produce, hygiene, or other. Dried fruit / nuts / trail mix / cereal / chips / bars / pasta / rice / canned goods are all "dry". Yogurt / cheese / milk / egg are "refrigerated". Frozen meal/fruit/vegetable are "frozen". Soda / juice / water / tea / coffee / plant milk in a beverage container are "beverage".
+
+- description should mention the package FORMAT first (box, pouch, can, jar, bottle, bar wrapper) plus color, imagery, and only label words that you can actually read (e.g. "soft blue pouch with berry illustration; label text too small to read"). Never include invented flavor, brand, or product details.
 - confidence must honestly reflect how readable the label is:
   * "high": brand AND product name are clearly readable in the image.
   * "medium": product type is clearly visible but brand or exact name is partial/blurry.
@@ -480,6 +494,123 @@ function sanitizeHallucinatedNames(item: RawInventoryItem): RawInventoryItem {
   };
 }
 
+const TYPE_KEYWORD_RULES: Array<{
+  type: string;
+  category: string;
+  patterns: RegExp[];
+}> = [
+  {
+    type: "dried fruit",
+    category: "dry",
+    patterns: [
+      /\bdried\s+fruit\b/i,
+      /\bdried\s+(blueberr|strawberr|cranberr|cherr|mango|apricot|fig|pineapple|banana)\w*/i,
+      /\braisin/i,
+      /\bfruit\s+(pouch|bag|mix|medley)\b/i,
+      /\bfruit\s+and\s+nut\b/i,
+    ],
+  },
+  {
+    type: "nuts",
+    category: "dry",
+    patterns: [
+      /\balmond/i,
+      /\bcashew/i,
+      /\bwalnut/i,
+      /\bpistachio/i,
+      /\bpecan/i,
+      /\broasted\s+peanuts?\b/i,
+      /\bmixed\s+nuts?\b/i,
+    ],
+  },
+  {
+    type: "trail mix",
+    category: "dry",
+    patterns: [/\btrail\s+mix\b/i],
+  },
+  {
+    type: "snack bar",
+    category: "dry",
+    patterns: [
+      /\b(granola|protein|energy|breakfast|fiber|fruit|nut)\s+bar\b/i,
+      /\bclif\b/i,
+      /\bkind\s+bar\b/i,
+      /\brx\s*bar\b/i,
+    ],
+  },
+  {
+    type: "chips",
+    category: "dry",
+    patterns: [
+      /\b(potato|tortilla|veggie|pita|kale|plantain)\s+chips?\b/i,
+      /\bcrisps?\b/i,
+    ],
+  },
+  {
+    type: "peanut butter",
+    category: "dry",
+    patterns: [/\bpeanut\s+butter\b/i, /\balmond\s+butter\b/i, /\bnut\s+butter\b/i],
+  },
+  {
+    type: "canned soup",
+    category: "dry",
+    patterns: [/\bcanned?\s+soup\b/i, /\bchicken\s+noodle\s+soup\b/i],
+  },
+  {
+    type: "pasta",
+    category: "dry",
+    patterns: [/\bspaghetti\b/i, /\bpenne\b/i, /\bfusilli\b/i, /\brigatoni\b/i, /\bmacaroni\b/i, /\bpasta\b/i],
+  },
+  {
+    type: "rice",
+    category: "dry",
+    patterns: [/\b(white|brown|jasmine|basmati)\s+rice\b/i, /\brice\s+(bag|pouch)\b/i],
+  },
+];
+
+const BARE_GENERIC_NAME_REGEX = /^(cereal|chips?|snacks?|food|item|product|candy|bars?|pasta|rice)$/i;
+
+function correctObviousTypeMismatches(item: RawInventoryItem): RawInventoryItem {
+  const haystack = `${item.name || ""} ${item.description || ""}`.toLowerCase();
+  if (!haystack.trim()) {
+    return item;
+  }
+
+  for (const rule of TYPE_KEYWORD_RULES) {
+    if (rule.patterns.some((pattern) => pattern.test(haystack))) {
+      if ((item.type || "").toLowerCase() === rule.type && (item.category || "").toLowerCase() === rule.category) {
+        return item;
+      }
+      return {
+        ...item,
+        type: rule.type,
+        category: rule.category,
+      };
+    }
+  }
+
+  return item;
+}
+
+function rewriteBareGenericName(item: RawInventoryItem): RawInventoryItem {
+  const trimmedName = (item.name || "").trim();
+  if (!trimmedName || !BARE_GENERIC_NAME_REGEX.test(trimmedName)) {
+    return item;
+  }
+
+  const fallbackType = (item.type || "item").trim() || "item";
+  const newName = `Unknown ${fallbackType}`;
+  if (newName.toLowerCase() === trimmedName.toLowerCase()) {
+    return item;
+  }
+
+  return {
+    ...item,
+    name: newName,
+    confidence: "low",
+  };
+}
+
 async function cropImageToBase64(
   file: File,
   location: ItemLocation,
@@ -561,11 +692,21 @@ Return ONLY valid JSON, no markdown, with this exact schema:
 
 Rules:
 - Only use words you can literally read off the package. If the product name is not legible, the "name" field MUST be exactly "Unknown <type>" (for example "Unknown dried fruit", "Unknown snack bar"). Do not compose plausible product names from colors or shapes.
+- The "name" field must NEVER be a bare category word like "Cereal", "Chips", "Snack", "Food", "Item", or "Product". Use "Unknown <type>" instead.
 - Never combine a visible brand with a guessed product word. Either copy the full readable product name, or fall back to "Unknown <type>".
 - brand: copy verbatim from the label if readable; otherwise "". Never guess a brand.
-- type MUST describe what this package actually contains, inferred from visible imagery and readable words only. If the package shows fruit, nuts, or a snack pouch, it is NOT "cereal".
-- category MUST match type.
-- description: describe colors, shape, readable label words only. Do not fabricate flavor or brand details.
+- type MUST describe what THIS package physically contains, judged from its format, imagery, and readable words only. Ignore what kind of shelf it came from.
+    * rigid rectangular box with cereal/flakes/bran/granola/O's imagery or wording → cereal / granola / oatmeal.
+    * soft plastic pouch / resealable bag with fruit imagery (berries, raisins, mango, apricots) → "dried fruit" (NOT cereal).
+    * soft bag with nuts or trail mix imagery → nuts / trail mix.
+    * individually wrapped bar → snack bar / candy.
+    * crinkly chip bag → chips.
+    * can/tin → canned soup/vegetable/fruit/meat as appropriate.
+    * jar → peanut butter / jam / sauce / condiment.
+    * bottle/carton of liquid → beverage / milk / juice / water.
+- Use type "cereal" ONLY when the package itself looks like cereal (cereal-style box or bag with cereal imagery/wording). A soft fruit pouch is not cereal even if cropped from a cereal shelf.
+- category MUST match type (dry / refrigerated / frozen / beverage / produce / hygiene / other).
+- description: start with the package format (box, pouch, can, jar, bottle, bar wrapper), then describe colors, imagery, and readable label words only. Do not fabricate flavor or brand details.
 - confidence "high" is allowed ONLY when brand AND full product name are readable.
 - If you are unsure, prefer "Unknown <type>" with low confidence over any guess.
 `.trim();
@@ -767,9 +908,21 @@ async function analyzeOneImage(file: File, shelfName: string): Promise<AnalyzeOn
     shelfName
   );
 
-  const sanitizedItems = refinedItems.map(sanitizeHallucinatedNames);
-  const sanitizedCount = sanitizedItems.reduce(
+  const hallucinationSanitized = refinedItems.map(sanitizeHallucinatedNames);
+  const sanitizedCount = hallucinationSanitized.reduce(
     (count, item, index) => count + (item === refinedItems[index] ? 0 : 1),
+    0
+  );
+
+  const typeCorrected = hallucinationSanitized.map(correctObviousTypeMismatches);
+  const typeCorrectedCount = typeCorrected.reduce(
+    (count, item, index) => count + (item === hallucinationSanitized[index] ? 0 : 1),
+    0
+  );
+
+  const sanitizedItems = typeCorrected.map(rewriteBareGenericName);
+  const genericNameRewriteCount = sanitizedItems.reduce(
+    (count, item, index) => count + (item === typeCorrected[index] ? 0 : 1),
     0
   );
 
@@ -828,6 +981,16 @@ async function analyzeOneImage(file: File, shelfName: string): Promise<AnalyzeOn
   if (sanitizedCount > 0) {
     combinedNotes.push(
       `Rewrote ${sanitizedCount} item name${sanitizedCount === 1 ? "" : "s"} that looked fabricated as "Unknown <type>".`
+    );
+  }
+  if (typeCorrectedCount > 0) {
+    combinedNotes.push(
+      `Corrected type/category for ${typeCorrectedCount} item${typeCorrectedCount === 1 ? "" : "s"} whose name or description clearly indicated a different product class (e.g. dried fruit mislabeled as cereal).`
+    );
+  }
+  if (genericNameRewriteCount > 0) {
+    combinedNotes.push(
+      `Rewrote ${genericNameRewriteCount} bare generic name${genericNameRewriteCount === 1 ? "" : "s"} (like "Cereal") to "Unknown <type>".`
     );
   }
   if (estimatedQuantityCount > 0) {
