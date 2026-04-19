@@ -1,6 +1,8 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import type React from 'react'
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react'
+import FloorPlanCanvas, { FLOORPLAN_CANVAS_SIZE } from '../../../components/FloorPlanCanvas'
 
 // ============================================================
 // Types
@@ -81,10 +83,16 @@ export interface SavePayload {
   walls: WallPayload[]
 }
 
+export interface MapZoneEditorRef {
+  triggerSave: () => void
+  getPayload: () => SavePayload
+}
+
 export interface MapZoneEditorProps {
   initialZones?: Zone[]
   initialWalls?: Wall[]
   initialMarkers?: Marker[]
+  initialPayload?: SavePayload
   onSave: (payload: SavePayload) => void
 }
 
@@ -120,6 +128,58 @@ const DEFAULT_WALL_H = 16
 const WALL_COLOR = '#31456B'
 const WALL_EDGE = '#22304b'
 const WALL_FILL = 'rgba(49,69,107,0.88)'
+const CUT_CORNER_SIZE = 22
+const PANEL_BORDER_WIDTH = 3
+
+function hexClip(cut: number) {
+  return `polygon(${cut}px 0, calc(100% - ${cut}px) 0, 100% ${cut}px, 100% calc(100% - ${cut}px), calc(100% - ${cut}px) 100%, ${cut}px 100%, 0 calc(100% - ${cut}px), 0 ${cut}px)`
+}
+
+interface HexPanelProps {
+  children: React.ReactNode
+  fill?: string
+  borderColor?: string
+  style?: React.CSSProperties
+  contentStyle?: React.CSSProperties
+}
+
+function HexPanel({
+  children,
+  fill = 'var(--fp-surface-primary)',
+  borderColor = 'var(--fp-panel-border)',
+  style,
+  contentStyle,
+}: HexPanelProps) {
+  const innerCut = Math.max(0, CUT_CORNER_SIZE - PANEL_BORDER_WIDTH)
+
+  return (
+    <div style={{ position: 'relative', overflow: 'visible', ...style }}>
+      <div
+        aria-hidden="true"
+        style={{
+          position: 'absolute',
+          inset: 0,
+          clipPath: hexClip(CUT_CORNER_SIZE),
+          background: borderColor,
+          boxShadow: '0 0 0 1px var(--fp-panel-glow-1), 0 0 14px var(--fp-panel-glow-2), 0 0 30px var(--fp-panel-glow-2), 0 0 52px var(--fp-panel-glow-3)',
+          filter: 'drop-shadow(0 0 8px var(--fp-panel-drop-1)) drop-shadow(0 0 18px var(--fp-panel-drop-2)) drop-shadow(0 0 34px var(--fp-panel-drop-3)) drop-shadow(0 8px 14px rgba(0,0,0,0.45))',
+          pointerEvents: 'none',
+        }}
+      />
+      <div
+        style={{
+          position: 'relative',
+          margin: PANEL_BORDER_WIDTH,
+          clipPath: hexClip(innerCut),
+          background: fill,
+          ...contentStyle,
+        }}
+      >
+        {children}
+      </div>
+    </div>
+  )
+}
 
 const CATEGORIES = [
   { id: 'frozen' as CategoryId,        label: 'Frozen',         fill: '#E6F1FB', text: '#0C447C' },
@@ -193,12 +253,13 @@ function MarkerIcon({ type, color, size }: { type: MarkerType; color: string; si
 // Component
 // ============================================================
 
-export default function MapZoneEditor({
+const MapZoneEditor = forwardRef<MapZoneEditorRef, MapZoneEditorProps>(function MapZoneEditor({
   initialZones = [],
   initialWalls = [],
   initialMarkers = [],
+  initialPayload,
   onSave,
-}: MapZoneEditorProps) {
+}: MapZoneEditorProps, ref) {
   const [zones,       setZones]       = useState<Zone[]>(initialZones)
   const [walls,       setWalls]       = useState<Wall[]>(initialWalls)
   const [markers,     setMarkers]     = useState<Marker[]>(initialMarkers)
@@ -208,45 +269,72 @@ export default function MapZoneEditor({
   const [activeOrientation, setActiveOrientation] = useState<'H' | 'V'>('H')
   const [ghost,       setGhost]       = useState<{ x: number; y: number; w: number; h: number } | null>(null)
   const [saved,       setSaved]       = useState(false)
-  const [canvasSize,  setCanvasSize]  = useState(700)
 
-  const editorRef  = useRef<HTMLDivElement>(null)
-  const canvasRef  = useRef<HTMLDivElement>(null)
-  const wrapperRef = useRef<HTMLDivElement>(null)
-  const dragRef    = useRef<DragState>(null)
+  const editorRef         = useRef<HTMLDivElement>(null)
+  const canvasRef         = useRef<HTMLDivElement>(null)
+  const dragRef           = useRef<DragState>(null)
+  const hasLoadedPayload  = useRef(false)
+  const hydratedCanvasRef = useRef(0)
+  const hasUserEditedRef  = useRef(false)
+  const canvasSize = FLOORPLAN_CANVAS_SIZE
 
   const selectedZone   = selected?.kind === 'zone'   ? zones.find(z => z.id === selected.id)   ?? null : null
   const selectedWall   = selected?.kind === 'wall'   ? walls.find(w => w.id === selected.id)   ?? null : null
   const selectedMarker = selected?.kind === 'marker' ? markers.find(m => m.id === selected.id) ?? null : null
 
   // ----------------------------------------------------------
-  // Responsive perfect-square canvas
+  // Load initialPayload into editor once canvas size is known
   // ----------------------------------------------------------
+  function hydratePayload(payload: SavePayload, s: number) {
+    setZones(payload.sections.map(sec => ({
+      id: uid(),
+      catId: sec.cat_id as CategoryId,
+      limit: sec.limit_per_student,
+      orientation: sec.orientation as 'H' | 'V',
+      rotation: sec.rotation,
+      x: sec.map_x * s,
+      y: sec.map_y * s,
+      w: sec.map_w * s,
+      h: sec.map_h * s,
+    })))
+    setWalls(payload.walls.map(w => ({
+      id: uid(),
+      orientation: w.orientation as 'H' | 'V',
+      rotation: w.rotation,
+      x: w.map_x * s,
+      y: w.map_y * s,
+      w: w.map_w * s,
+      h: w.map_h * s,
+    })))
+    setMarkers(payload.markers.map(m => ({
+      id: uid(),
+      type: m.type as MarkerType,
+      x: m.map_x * s,
+      y: m.map_y * s,
+      w: m.map_w * s,
+      h: m.map_h * s,
+    })))
+  }
+
   useEffect(() => {
-    const wrapper = wrapperRef.current
-    const editor = editorRef.current
-    if (!wrapper || !editor) return
+    if (!initialPayload || canvasSize <= 0) return
 
-    const updateCanvasSize = () => {
-      const wrapperWidth = wrapper.getBoundingClientRect().width
-      const editorTop = editor.getBoundingClientRect().top
-      const viewportHeight = window.innerHeight
-      const reservedBottomSpace = 24
-      const hintHeight = 32
-      const availableHeight = Math.max(320, viewportHeight - editorTop - reservedBottomSpace - hintHeight)
-      setCanvasSize(Math.floor(Math.min(wrapperWidth, availableHeight)))
-    }
+    const shouldHydrateInitially = !hasLoadedPayload.current
+    const shouldRehydrateForSettledSize =
+      hasLoadedPayload.current &&
+      !hasUserEditedRef.current &&
+      hydratedCanvasRef.current !== canvasSize
 
-    const ro = new ResizeObserver(() => updateCanvasSize())
-    ro.observe(wrapper)
-    ro.observe(editor)
-    updateCanvasSize()
-    window.addEventListener('resize', updateCanvasSize)
-    return () => {
-      ro.disconnect()
-      window.removeEventListener('resize', updateCanvasSize)
-    }
-  }, [])
+    if (!shouldHydrateInitially && !shouldRehydrateForSettledSize) return
+
+    hasLoadedPayload.current = true
+    hydratedCanvasRef.current = canvasSize
+    hydratePayload(initialPayload, canvasSize)
+  }, [canvasSize, initialPayload])
+
+  function markUserEdited() {
+    hasUserEditedRef.current = true
+  }
 
   // ----------------------------------------------------------
   // Window mouse handlers
@@ -274,6 +362,7 @@ export default function MapZoneEditor({
 
     // Move — works for zones, walls, and markers
     if (d.type === 'move') {
+      markUserEdited()
       const dx = mx - d.startX
       const dy = my - d.startY
       if (d.kind === 'zone' && d.itemId) {
@@ -309,6 +398,7 @@ export default function MapZoneEditor({
 
     // Resize right — zones, walls, and markers
     if (d.type === 'resize-r' && d.itemId) {
+      markUserEdited()
       if (d.kind === 'marker') {
         // origX holds the marker's left edge at drag-start
         const left = d.origX!
@@ -332,6 +422,7 @@ export default function MapZoneEditor({
 
     // Resize bottom — zones, walls, and markers
     if (d.type === 'resize-b' && d.itemId) {
+      markUserEdited()
       if (d.kind === 'marker') {
         // origY holds the marker's top edge at drag-start
         const top = d.origY!
@@ -372,6 +463,7 @@ export default function MapZoneEditor({
         const rawW = Math.abs(mx - d.startX)
         const rawH = Math.abs(my - d.startY)
         if (rawW >= DRAW_MIN_W && rawH >= DRAW_MIN_H) {
+          markUserEdited()
           const nz: Zone = {
             id: uid(),
             catId: activeCatRef.current,
@@ -416,7 +508,8 @@ export default function MapZoneEditor({
     const z = zones.find(z => z.id === id)
     if (!z) return
     setSelected({ id, kind: 'zone' })
-    dragRef.current = { type: 'move', itemId: id, kind: 'zone', startX: e.clientX, startY: e.clientY, origX: z.x, origY: z.y }
+    const b = canvasRef.current?.getBoundingClientRect()
+    dragRef.current = { type: 'move', itemId: id, kind: 'zone', startX: e.clientX - (b?.left ?? 0), startY: e.clientY - (b?.top ?? 0), origX: z.x, origY: z.y }
   }
 
   function handleMarkerMouseDown(e: React.MouseEvent, id: string) {
@@ -424,7 +517,8 @@ export default function MapZoneEditor({
     const m = markers.find(m => m.id === id)
     if (!m) return
     setSelected({ id, kind: 'marker' })
-    dragRef.current = { type: 'move', itemId: id, kind: 'marker', startX: e.clientX, startY: e.clientY, origX: m.x, origY: m.y }
+    const b = canvasRef.current?.getBoundingClientRect()
+    dragRef.current = { type: 'move', itemId: id, kind: 'marker', startX: e.clientX - (b?.left ?? 0), startY: e.clientY - (b?.top ?? 0), origX: m.x, origY: m.y }
   }
 
   function handleWallMouseDown(e: React.MouseEvent, id: string) {
@@ -432,7 +526,8 @@ export default function MapZoneEditor({
     const w = walls.find(w => w.id === id)
     if (!w) return
     setSelected({ id, kind: 'wall' })
-    dragRef.current = { type: 'move', itemId: id, kind: 'wall', startX: e.clientX, startY: e.clientY, origX: w.x, origY: w.y }
+    const b = canvasRef.current?.getBoundingClientRect()
+    dragRef.current = { type: 'move', itemId: id, kind: 'wall', startX: e.clientX - (b?.left ?? 0), startY: e.clientY - (b?.top ?? 0), origX: w.x, origY: w.y }
   }
 
   function handleZoneResizeRMouseDown(e: React.MouseEvent, id: string) {
@@ -482,6 +577,7 @@ export default function MapZoneEditor({
   // Zone actions
   // ----------------------------------------------------------
   function addShelf() {
+    markUserEdited()
     const w = activeOrientation === 'H' ? 180 : 55
     const h = activeOrientation === 'H' ? 55 : 140
     const nz: Zone = {
@@ -500,12 +596,14 @@ export default function MapZoneEditor({
   }
 
   function deleteZone(id: string) {
+    markUserEdited()
     setZones(prev => prev.filter(z => z.id !== id))
     setSelected(null)
   }
 
   function updateZone(updates: Partial<Zone>) {
     if (selected?.kind !== 'zone') return
+    markUserEdited()
     setZones(prev => prev.map(z => (z.id === selected.id ? { ...z, ...updates } : z)))
   }
 
@@ -523,6 +621,7 @@ export default function MapZoneEditor({
   // Wall actions
   // ----------------------------------------------------------
   function addWall() {
+    markUserEdited()
     const w = activeOrientation === 'H' ? DEFAULT_WALL_W : DEFAULT_WALL_H
     const h = activeOrientation === 'H' ? DEFAULT_WALL_H : DEFAULT_WALL_W
     const nw: Wall = {
@@ -539,12 +638,14 @@ export default function MapZoneEditor({
   }
 
   function deleteWall(id: string) {
+    markUserEdited()
     setWalls(prev => prev.filter(w => w.id !== id))
     setSelected(null)
   }
 
   function updateWall(updates: Partial<Wall>) {
     if (selected?.kind !== 'wall') return
+    markUserEdited()
     setWalls(prev => prev.map(w => (w.id === selected.id ? { ...w, ...updates } : w)))
   }
 
@@ -562,6 +663,7 @@ export default function MapZoneEditor({
   // Marker actions
   // ----------------------------------------------------------
   function addMarker(type: MarkerType) {
+    markUserEdited()
     const nm: Marker = {
       id: uid(),
       type,
@@ -575,6 +677,7 @@ export default function MapZoneEditor({
   }
 
   function deleteMarker(id: string) {
+    markUserEdited()
     setMarkers(prev => prev.filter(m => m.id !== id))
     setSelected(null)
   }
@@ -620,14 +723,23 @@ export default function MapZoneEditor({
   }
 
   function handleSave() {
-    onSave({
-      sections: zones.map(toSectionPayload),
-      markers: markers.map(toMarkerPayload),
-      walls: walls.map(toWallPayload),
-    })
+    onSave(buildPayload())
     setSaved(true)
     setTimeout(() => setSaved(false), 2500)
   }
+
+  function buildPayload(): SavePayload {
+    return {
+      sections: zones.map(toSectionPayload),
+      markers: markers.map(toMarkerPayload),
+      walls: walls.map(toWallPayload),
+    }
+  }
+
+  useImperativeHandle(ref, () => ({
+    triggerSave: handleSave,
+    getPayload: buildPayload,
+  }))
 
   // ----------------------------------------------------------
   // Shared style tokens
@@ -635,25 +747,104 @@ export default function MapZoneEditor({
   const ghostCat = getCat(activeCategory)
 
   const inputStyle: React.CSSProperties = {
-    width: '100%', border: '2px solid #7AAAC8', borderRadius: 4,
-    padding: '6px 10px', fontSize: 18, backgroundColor: '#ffffff', color: '#1a2333',
+    width: '100%',
+    minHeight: 50,
+    border: '1.5px solid var(--fp-input-border)',
+    borderRadius: 12,
+    padding: '10px 14px',
+    fontSize: 17,
+    backgroundColor: 'var(--fp-input-bg)',
+    color: 'var(--fp-text-primary)',
     boxSizing: 'border-box',
-  }
-
-  const sectionBox: React.CSSProperties = {
-    border: '1px solid #c8d8eb', borderRadius: 8, padding: 14,
-    backgroundColor: '#ddeaf6',
-    display: 'flex', flexDirection: 'column', gap: 12,
+    boxShadow: 'var(--fp-input-shadow)',
+    outline: 'none',
   }
 
   const sectionLabel: React.CSSProperties = {
-    fontSize: 15, fontWeight: 700, textTransform: 'uppercase',
-    letterSpacing: '0.07em', color: '#1e3452', margin: 0,
+    fontSize: 12,
+    fontWeight: 800,
+    textTransform: 'uppercase',
+    letterSpacing: '0.14em',
+    color: 'var(--fp-text-muted)',
+    margin: 0,
   }
 
   const fieldLabel: React.CSSProperties = {
-    fontSize: 17, color: '#4a6080', display: 'block', marginBottom: 4,
+    fontSize: 14,
+    fontWeight: 700,
+    color: 'var(--fp-text-secondary)',
+    display: 'block',
+    marginBottom: 8,
   }
+
+  const helperText: React.CSSProperties = {
+    fontSize: 14,
+    color: 'var(--fp-text-subtle)',
+    margin: 0,
+    lineHeight: 1.45,
+  }
+
+  const metricText: React.CSSProperties = {
+    fontSize: 15,
+    color: 'var(--fp-text-muted)',
+    margin: 0,
+    lineHeight: 1.45,
+  }
+
+  const subtleResetButton: React.CSSProperties = {
+    marginTop: 6,
+    fontSize: 14,
+    fontWeight: 700,
+    color: 'var(--fp-text-muted)',
+    background: 'none',
+    border: 'none',
+    cursor: 'pointer',
+    padding: 0,
+  }
+
+  const dangerTextButton: React.CSSProperties = {
+    fontSize: 16,
+    fontWeight: 700,
+    color: '#dc2626',
+    background: 'none',
+    border: 'none',
+    cursor: 'pointer',
+    padding: 0,
+    textAlign: 'left',
+  }
+
+  function panelButton(active: boolean, palette: { activeBg: string; activeText: string; border: string }) {
+    return {
+      flex: 1,
+      minHeight: 46,
+      padding: '10px 12px',
+      borderRadius: 12,
+      fontSize: 17,
+      fontWeight: 700,
+      border: `1px solid ${palette.border}`,
+      backgroundColor: active ? palette.activeBg : 'var(--fp-input-bg)',
+      color: active ? palette.activeText : 'var(--fp-text-muted)',
+      cursor: 'pointer',
+      boxShadow: 'var(--fp-input-shadow)',
+    } satisfies React.CSSProperties
+  }
+
+  const primaryPanelButton: React.CSSProperties = {
+    width: '100%',
+    minHeight: 52,
+    padding: '12px 16px',
+    borderRadius: 14,
+    background: 'linear-gradient(180deg, var(--fp-button-primary) 0%, #263855 100%)',
+    color: '#fff',
+    fontSize: 19,
+    fontWeight: 800,
+    border: 'none',
+    cursor: 'pointer',
+    boxShadow: 'var(--fp-input-shadow)',
+  }
+
+  const actionRowPalette = { activeBg: 'var(--fp-button-primary)', activeText: '#ffffff', border: 'var(--fp-button-primary)' }
+  const accentRowPalette = { activeBg: 'var(--fp-button-accent)', activeText: '#ffffff', border: 'var(--fp-button-accent)' }
 
   // ----------------------------------------------------------
   // Shared resize handle renderer
@@ -694,172 +885,58 @@ export default function MapZoneEditor({
   return (
     <div
       ref={editorRef}
-      style={{ display: 'flex', gap: 24, width: '100%', height: '100%', userSelect: 'none', alignItems: 'flex-start', overflow: 'hidden' }}
+      style={{ display: 'flex', gap: 24, width: '100%', height: '100%', userSelect: 'none', alignItems: 'flex-start', overflow: 'visible' }}
     >
 
       {/* ==================================================
           Canvas column
       ================================================== */}
-      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
-        <p style={{ fontSize: 18, color: '#4a6080', margin: 0 }}>
-          Click and drag to draw a shelf zone. Click any element to select and edit it.
-        </p>
-
-        <div ref={wrapperRef} style={{ width: '100%', flex: 1, minHeight: 0 }}>
-          <div
-            ref={canvasRef}
-            onMouseDown={handleCanvasMouseDown}
-            style={{
-              position: 'relative',
-              width: '100%',
-              height: canvasSize,
-              // Blueprint-style themed background
-              backgroundColor: '#C8DCED',
-              border: '4px solid #6B92B6',
-              borderRadius: 10,
-              overflow: 'hidden',
-              // White grid lines on the blue canvas — blueprint feel
-              backgroundImage: `
-                linear-gradient(to right,  rgba(255,255,255,0.35) 1px, transparent 1px),
-                linear-gradient(to bottom, rgba(255,255,255,0.35) 1px, transparent 1px)
-              `,
-              backgroundSize: '20px 20px',
-              cursor: 'crosshair',
-              boxShadow: '0 0 0 2px rgba(107,146,182,0.2), 0 8px 28px rgba(49,69,107,0.18)',
-            }}
-          >
-
-              {/* Shelf zones */}
-            {zones.map(z => {
-              const cat = getCat(z.catId)
-              const isSel = selected?.id === z.id && selected?.kind === 'zone'
-                return (
-                  <div
-                    key={z.id}
-                    onMouseDown={e => handleZoneMouseDown(e, z.id)}
-                    style={{
-                      position: 'absolute',
-                      left: z.x, top: z.y, width: z.w, height: z.h,
-                      backgroundColor: cat.fill,
-                      border: isSel ? '2px solid #6B92B6' : `1.5px solid ${cat.text}55`,
-                      borderRadius: 5,
-                      cursor: 'move',
-                      zIndex: isSel ? 10 : 1,
-                      boxShadow: isSel ? '0 0 0 3px #6B92B640' : '0 1px 4px rgba(0,0,0,0.15)',
-                      transform: `rotate(${z.rotation}deg)`,
-                      transformOrigin: 'center center',
-                      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-                      overflow: 'visible',
-                    }}
-                  >
-                    <span style={{ color: cat.text, fontSize: 15, fontWeight: 600, pointerEvents: 'none', lineHeight: 1.2, textAlign: 'center', padding: '0 4px', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', maxWidth: '100%' }}>
-                      {cat.label}
-                    </span>
-                    <span style={{ color: cat.text, fontSize: 14, opacity: 0.6, pointerEvents: 'none', lineHeight: 1.2 }}>
-                      Limit: {z.limit}
-                    </span>
-                    {z.rotation !== 0 && (
-                      <span style={{ color: cat.text, fontSize: 13, opacity: 0.4, pointerEvents: 'none', lineHeight: 1 }}>
-                        {z.rotation}°
-                      </span>
-                    )}
-                    {isSel && <ResizeHandleR onDown={e => handleZoneResizeRMouseDown(e, z.id)} />}
-                    {isSel && <ResizeHandleB onDown={e => handleZoneResizeBMouseDown(e, z.id)} />}
-                    {isSel && <DeleteBtn onClick={() => deleteZone(z.id)} />}
-                  </div>
-                )
-              })}
-
-              {/* Walls */}
-              {walls.map(w => {
-                const isSel = selected?.id === w.id && selected?.kind === 'wall'
-                return (
-                  <div
-                    key={w.id}
-                    onMouseDown={e => handleWallMouseDown(e, w.id)}
-                    style={{
-                      position: 'absolute',
-                      left: w.x, top: w.y, width: w.w, height: w.h,
-                    backgroundColor: WALL_FILL,
-                      border: isSel ? '2px solid #6B92B6' : `1.5px solid ${WALL_EDGE}`,
-                      borderRadius: 4,
-                      cursor: 'move',
-                      zIndex: isSel ? 12 : 4,
-                      boxShadow: isSel ? '0 0 0 3px #6B92B640' : '0 1px 4px rgba(0,0,0,0.18)',
-                      transform: `rotate(${w.rotation}deg)`,
-                      transformOrigin: 'center center',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      overflow: 'visible',
-                    }}
-                  >
-                    <span style={{ color: '#ffffff', fontSize: 14, fontWeight: 700, pointerEvents: 'none', lineHeight: 1, letterSpacing: '0.08em', opacity: 0.85 }}>
-                      WALL
-                    </span>
-                    {w.rotation !== 0 && (
-                      <span style={{ position: 'absolute', bottom: 3, right: 6, color: '#ffffff', fontSize: 13, fontWeight: 700, pointerEvents: 'none', lineHeight: 1, opacity: 0.75 }}>
-                        {w.rotation}°
-                      </span>
-                    )}
-                    {isSel && <ResizeHandleR onDown={e => handleWallResizeRMouseDown(e, w.id)} />}
-                    {isSel && <ResizeHandleB onDown={e => handleWallResizeBMouseDown(e, w.id)} />}
-                    {isSel && <DeleteBtn onClick={() => deleteWall(w.id)} />}
-                  </div>
-                )
-              })}
-
-              {/* Markers */}
-              {markers.map(m => {
-                const cfg = MARKER_CONFIGS[m.type]
-                const isSel = selected?.id === m.id && selected?.kind === 'marker'
-                const iconSize = Math.max(16, Math.min(m.w, m.h) * 0.38)
-                return (
-                  <div
-                    key={m.id}
-                    onMouseDown={e => handleMarkerMouseDown(e, m.id)}
-                    style={{
-                      position: 'absolute',
-                      left: m.x - m.w / 2,
-                      top:  m.y - m.h / 2,
-                      width: m.w,
-                      height: m.h,
-                      backgroundColor: cfg.bg,
-                      border: isSel ? '2px solid #6B92B6' : `2px solid ${cfg.border}`,
-                      borderRadius: 8,
-                      cursor: 'move',
-                      zIndex: isSel ? 15 : 5,
-                      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-                      gap: 3,
-                      overflow: 'visible',
-                      boxShadow: isSel ? '0 0 0 3px #6B92B630' : `0 2px 8px ${cfg.border}44`,
-                    }}
-                  >
-                    <MarkerIcon type={m.type} color={cfg.arrowColor} size={iconSize} />
-                    <span style={{ fontSize: Math.max(11, Math.min(15, m.w / 6.5)), fontWeight: 800, color: cfg.color, letterSpacing: '0.06em', pointerEvents: 'none', lineHeight: 1, textAlign: 'center' }}>
-                      {cfg.label}
-                    </span>
-                    {isSel && <ResizeHandleR onDown={e => handleMarkerResizeRMouseDown(e, m.id)} />}
-                    {isSel && <ResizeHandleB onDown={e => handleMarkerResizeBMouseDown(e, m.id)} />}
-                    {isSel && <DeleteBtn onClick={() => deleteMarker(m.id)} />}
-                  </div>
-                )
-              })}
-
-              {/* Drawing ghost */}
-              {ghost && (
-                <div style={{ position: 'absolute', left: ghost.x, top: ghost.y, width: ghost.w, height: ghost.h, backgroundColor: ghostCat.fill + 'bb', border: `2px dashed ${ghostCat.text}`, borderRadius: 5, pointerEvents: 'none', zIndex: 5 }} />
-              )}
-            </div>
-          </div>
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{ width: canvasSize, height: canvasSize, flexShrink: 0 }}>
+          <FloorPlanCanvas
+            canvasRef={canvasRef}
+            canvasSize={canvasSize}
+            zones={zones}
+            walls={walls}
+            markers={markers}
+            selected={selected}
+            ghost={ghost}
+            ghostCategoryId={activeCategory}
+            onCanvasMouseDown={handleCanvasMouseDown}
+            onZoneMouseDown={handleZoneMouseDown}
+            onWallMouseDown={handleWallMouseDown}
+            onMarkerMouseDown={handleMarkerMouseDown}
+            renderZoneExtras={(zone, isSelected) => (
+              <>
+                {isSelected && <ResizeHandleR onDown={e => handleZoneResizeRMouseDown(e, zone.id)} />}
+                {isSelected && <ResizeHandleB onDown={e => handleZoneResizeBMouseDown(e, zone.id)} />}
+                {isSelected && <DeleteBtn onClick={() => deleteZone(zone.id)} />}
+              </>
+            )}
+            renderWallExtras={(wall, isSelected) => (
+              <>
+                {isSelected && <ResizeHandleR onDown={e => handleWallResizeRMouseDown(e, wall.id)} />}
+                {isSelected && <ResizeHandleB onDown={e => handleWallResizeBMouseDown(e, wall.id)} />}
+                {isSelected && <DeleteBtn onClick={() => deleteWall(wall.id)} />}
+              </>
+            )}
+            renderMarkerExtras={(marker, isSelected) => (
+              <>
+                {isSelected && <ResizeHandleR onDown={e => handleMarkerResizeRMouseDown(e, marker.id)} />}
+                {isSelected && <ResizeHandleB onDown={e => handleMarkerResizeBMouseDown(e, marker.id)} />}
+                {isSelected && <DeleteBtn onClick={() => deleteMarker(marker.id)} />}
+              </>
+            )}
+          />
+        </div>
       </div>
 
       {/* ==================================================
           Sidebar
       ================================================== */}
-      <div style={{ width: 560, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 16, overflowY: 'auto', maxHeight: canvasSize + 40, paddingRight: 4 }}>
+      <div style={{ width: 700, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 16, overflowY: 'auto', height: '100%', padding: '6px 16px 24px 6px' }}>
         {/* 1. New shelf defaults */}
-        <div style={sectionBox}>
+        <HexPanel contentStyle={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 12 }}>
           <p style={sectionLabel}>New shelf defaults</p>
 
           <div>
@@ -870,11 +947,17 @@ export default function MapZoneEditor({
                   key={cat.id}
                   onClick={() => setActiveCategory(cat.id)}
                   style={{
-                    backgroundColor: cat.fill, color: cat.text,
-                    border: activeCategory === cat.id ? `2px solid ${cat.text}` : '2px solid transparent',
+                    backgroundColor: activeCategory === cat.id ? cat.fill : 'var(--fp-input-bg)',
+                    color: activeCategory === cat.id ? cat.text : 'var(--fp-text-muted)',
+                    border: activeCategory === cat.id ? `1px solid ${cat.text}` : '1px solid var(--fp-input-border)',
                     outline: activeCategory === cat.id ? '2px solid #E0B457' : 'none',
-                    outlineOffset: 1, borderRadius: 7, padding: '12px 8px',
-                    fontSize: 18, fontWeight: 600, cursor: 'pointer', lineHeight: 1.2,
+                    outlineOffset: 1,
+                    borderRadius: 12,
+                    padding: '14px 10px',
+                    fontSize: 16,
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    lineHeight: 1.25,
                   }}
                 >
                   {cat.label}
@@ -895,7 +978,7 @@ export default function MapZoneEditor({
             <div style={{ display: 'flex', gap: 10 }}>
               {(['H', 'V'] as const).map(o => (
                 <button key={o} onClick={() => setActiveOrientation(o)}
-                  style={{ flex: 1, padding: '10px 0', borderRadius: 6, fontSize: 20, fontWeight: 600, border: '1.5px solid #31456B', backgroundColor: activeOrientation === o ? '#31456B' : '#fff', color: activeOrientation === o ? '#fff' : '#31456B', cursor: 'pointer' }}>
+                  style={panelButton(activeOrientation === o, actionRowPalette)}>
                   {o === 'H' ? 'Horizontal' : 'Vertical'}
                 </button>
               ))}
@@ -903,51 +986,51 @@ export default function MapZoneEditor({
           </div>
 
           <button onClick={addShelf}
-            style={{ width: '100%', padding: '12px 0', borderRadius: 6, backgroundColor: '#31456B', color: '#fff', fontSize: 21, fontWeight: 700, border: 'none', cursor: 'pointer' }}>
+            style={primaryPanelButton}>
             + Add shelf
           </button>
-        </div>
+        </HexPanel>
 
         {/* 2. Place markers */}
-        <div style={sectionBox}>
+        <HexPanel contentStyle={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 12 }}>
           <p style={sectionLabel}>Place markers</p>
           {(Object.keys(MARKER_CONFIGS) as MarkerType[]).map(type => {
             const cfg = MARKER_CONFIGS[type]
             return (
               <button key={type} onClick={() => addMarker(type)}
-                style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 7, backgroundColor: cfg.bg, border: `1.5px solid ${cfg.border}`, cursor: 'pointer', fontSize: 21, fontWeight: 600, color: cfg.color, textAlign: 'left' }}>
+                style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', borderRadius: 14, backgroundColor: cfg.bg, border: `1px solid ${cfg.border}`, cursor: 'pointer', fontSize: 18, fontWeight: 700, color: cfg.color, textAlign: 'left', boxShadow: 'var(--fp-input-shadow)' }}>
                 <MarkerIcon type={type} color={cfg.arrowColor} size={24} />
                 Add {MARKER_NICE_NAMES[type]}
               </button>
             )
           })}
-          <p style={{ fontSize: 15, color: '#4a6080', margin: 0 }}>Drag to reposition · drag handles to resize</p>
-        </div>
+          <p style={helperText}>Drag to reposition · drag handles to resize</p>
+        </HexPanel>
 
         {/* 3. Build walls */}
-        <div style={sectionBox}>
+        <HexPanel contentStyle={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 12 }}>
           <p style={sectionLabel}>Build walls</p>
           <div>
             <p style={fieldLabel}>Orientation</p>
             <div style={{ display: 'flex', gap: 10 }}>
               {(['H', 'V'] as const).map(o => (
                 <button key={o} onClick={() => setActiveOrientation(o)}
-                  style={{ flex: 1, padding: '10px 0', borderRadius: 6, fontSize: 20, fontWeight: 600, border: '1.5px solid #31456B', backgroundColor: activeOrientation === o ? '#31456B' : '#fff', color: activeOrientation === o ? '#fff' : '#31456B', cursor: 'pointer' }}>
+                  style={panelButton(activeOrientation === o, actionRowPalette)}>
                   {o === 'H' ? 'Horizontal wall' : 'Vertical wall'}
                 </button>
               ))}
             </div>
           </div>
           <button onClick={addWall}
-            style={{ width: '100%', padding: '12px 0', borderRadius: 6, backgroundColor: WALL_COLOR, color: '#fff', fontSize: 21, fontWeight: 700, border: 'none', cursor: 'pointer' }}>
+            style={primaryPanelButton}>
             + Add wall
           </button>
-          <p style={{ fontSize: 15, color: '#4a6080', margin: 0 }}>Walls can be moved and resized like other elements.</p>
-        </div>
+          <p style={helperText}>Walls can be moved and resized like other elements.</p>
+        </HexPanel>
 
         {/* 4a. Selected zone editor */}
         {selectedZone && (
-          <div style={{ ...sectionBox, border: '1.5px solid #6B92B6', backgroundColor: '#e8f0fb' }}>
+          <HexPanel fill="var(--fp-surface-accent)" contentStyle={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 12 }}>
             <p style={sectionLabel}>Selected shelf</p>
 
             <div>
@@ -969,7 +1052,7 @@ export default function MapZoneEditor({
               <div style={{ display: 'flex', gap: 10 }}>
                 {(['H', 'V'] as const).map(o => (
                   <button key={o} onClick={() => setSelectedOrientation(o)}
-                    style={{ flex: 1, padding: '10px 0', borderRadius: 6, fontSize: 20, fontWeight: 600, border: '1.5px solid #6B92B6', backgroundColor: selectedZone.orientation === o ? '#6B92B6' : '#fff', color: selectedZone.orientation === o ? '#fff' : '#6B92B6', cursor: 'pointer' }}>
+                    style={panelButton(selectedZone.orientation === o, accentRowPalette)}>
                     {o === 'H' ? 'Horizontal' : 'Vertical'}
                   </button>
                 ))}
@@ -979,38 +1062,38 @@ export default function MapZoneEditor({
             <div>
               <p style={{ ...fieldLabel, marginBottom: 6 }}>
                 Rotation&nbsp;
-                <span style={{ fontFamily: 'monospace', fontWeight: 700, color: '#31456B' }}>{selectedZone.rotation}°</span>
+                <span style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--fp-button-primary)' }}>{selectedZone.rotation}°</span>
               </p>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
                 {[-45, -15, 15, 45].map(delta => (
                   <button key={delta} onClick={() => rotateZone(delta)}
-                    style={{ padding: '9px 4px', borderRadius: 6, fontSize: 17, fontWeight: 700, border: '1.5px solid #6B92B6', backgroundColor: '#fff', color: '#6B92B6', cursor: 'pointer' }}>
+                    style={{ ...panelButton(false, accentRowPalette), minHeight: 42, padding: '8px 4px', fontSize: 15 }}>
                     {delta > 0 ? `+${delta}°` : `${delta}°`}
                   </button>
                 ))}
               </div>
               <button onClick={() => updateZone({ rotation: 0 })}
-                style={{ marginTop: 5, fontSize: 15, color: '#9ca3af', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
+                style={subtleResetButton}>
                 Reset to 0°
               </button>
             </div>
 
-            <p style={{ fontSize: 17, color: '#4a6080', margin: 0 }}>
+            <p style={metricText}>
               W: <span style={{ fontFamily: 'monospace', fontWeight: 600, color: '#1e3452' }}>{Math.round(selectedZone.w)}px</span>
               &nbsp;&nbsp;
               H: <span style={{ fontFamily: 'monospace', fontWeight: 600, color: '#1e3452' }}>{Math.round(selectedZone.h)}px</span>
             </p>
 
             <button onClick={() => deleteZone(selectedZone.id)}
-              style={{ fontSize: 17, fontWeight: 600, color: '#dc2626', background: 'none', border: 'none', cursor: 'pointer', padding: 0, textAlign: 'left' }}>
+              style={dangerTextButton}>
               Delete zone
             </button>
-          </div>
+          </HexPanel>
         )}
 
         {/* 4b. Selected wall editor */}
         {selectedWall && (
-          <div style={{ ...sectionBox, border: '1.5px solid #6B92B6', backgroundColor: '#e8f0fb' }}>
+          <HexPanel fill="var(--fp-surface-accent)" contentStyle={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 12 }}>
             <p style={sectionLabel}>Selected wall</p>
 
             <div>
@@ -1018,7 +1101,7 @@ export default function MapZoneEditor({
               <div style={{ display: 'flex', gap: 10 }}>
                 {(['H', 'V'] as const).map(o => (
                   <button key={o} onClick={() => setSelectedWallOrientation(o)}
-                    style={{ flex: 1, padding: '10px 0', borderRadius: 6, fontSize: 20, fontWeight: 600, border: '1.5px solid #6B92B6', backgroundColor: selectedWall.orientation === o ? '#6B92B6' : '#fff', color: selectedWall.orientation === o ? '#fff' : '#6B92B6', cursor: 'pointer' }}>
+                    style={panelButton(selectedWall.orientation === o, accentRowPalette)}>
                     {o === 'H' ? 'Horizontal' : 'Vertical'}
                   </button>
                 ))}
@@ -1028,64 +1111,64 @@ export default function MapZoneEditor({
             <div>
               <p style={{ ...fieldLabel, marginBottom: 6 }}>
                 Rotation&nbsp;
-                <span style={{ fontFamily: 'monospace', fontWeight: 700, color: '#31456B' }}>{selectedWall.rotation}°</span>
+                <span style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--fp-button-primary)' }}>{selectedWall.rotation}°</span>
               </p>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
                 {[-5, -1, 1, 5].map(delta => (
                   <button key={delta} onClick={() => rotateWall(delta)}
-                    style={{ padding: '9px 4px', borderRadius: 6, fontSize: 17, fontWeight: 700, border: '1.5px solid #6B92B6', backgroundColor: '#fff', color: '#6B92B6', cursor: 'pointer' }}>
+                    style={{ ...panelButton(false, accentRowPalette), minHeight: 42, padding: '8px 4px', fontSize: 15 }}>
                     {delta > 0 ? `+${delta}°` : `${delta}°`}
                   </button>
                 ))}
               </div>
               <button onClick={() => updateWall({ rotation: 0 })}
-                style={{ marginTop: 5, fontSize: 15, color: '#9ca3af', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
+                style={subtleResetButton}>
                 Reset to 0°
               </button>
             </div>
 
-            <p style={{ fontSize: 17, color: '#4a6080', margin: 0 }}>
+            <p style={metricText}>
               W: <span style={{ fontFamily: 'monospace', fontWeight: 600, color: '#1e3452' }}>{Math.round(selectedWall.w)}px</span>
               &nbsp;&nbsp;
               H: <span style={{ fontFamily: 'monospace', fontWeight: 600, color: '#1e3452' }}>{Math.round(selectedWall.h)}px</span>
             </p>
 
             <button onClick={() => deleteWall(selectedWall.id)}
-              style={{ fontSize: 17, fontWeight: 600, color: '#dc2626', background: 'none', border: 'none', cursor: 'pointer', padding: 0, textAlign: 'left' }}>
+              style={dangerTextButton}>
               Delete wall
             </button>
-          </div>
+          </HexPanel>
         )}
 
         {/* 4c. Selected marker editor */}
         {selectedMarker && (
-          <div style={{ ...sectionBox, border: `1.5px solid ${MARKER_CONFIGS[selectedMarker.type].border}`, backgroundColor: MARKER_CONFIGS[selectedMarker.type].bg + 'cc' }}>
+          <HexPanel fill="linear-gradient(180deg, rgba(88,126,166,0.3) 0%, rgba(52,80,116,0.4) 100%)" borderColor={`${MARKER_CONFIGS[selectedMarker.type].border}ee`} contentStyle={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 12 }}>
             <p style={sectionLabel}>Selected marker</p>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <MarkerIcon type={selectedMarker.type} color={MARKER_CONFIGS[selectedMarker.type].arrowColor} size={24} />
-              <span style={{ fontSize: 18, fontWeight: 700, color: MARKER_CONFIGS[selectedMarker.type].color }}>
+              <span style={{ fontSize: 17, fontWeight: 800, color: '#17324f', letterSpacing: '0.04em' }}>
                 {MARKER_CONFIGS[selectedMarker.type].label}
               </span>
             </div>
 
-            <p style={{ fontSize: 17, color: '#4a6080', margin: 0 }}>
+            <p style={metricText}>
               W: <span style={{ fontFamily: 'monospace', fontWeight: 600, color: '#1e3452' }}>{Math.round(selectedMarker.w)}px</span>
               &nbsp;&nbsp;
               H: <span style={{ fontFamily: 'monospace', fontWeight: 600, color: '#1e3452' }}>{Math.round(selectedMarker.h)}px</span>
             </p>
 
-            <p style={{ fontSize: 15, color: '#4a6080', margin: 0 }}>Drag to move · drag handles to resize</p>
+            <p style={helperText}>Drag to move · drag handles to resize</p>
 
             <button onClick={() => deleteMarker(selectedMarker.id)}
-              style={{ fontSize: 17, fontWeight: 600, color: '#dc2626', background: 'none', border: 'none', cursor: 'pointer', padding: 0, textAlign: 'left' }}>
+              style={dangerTextButton}>
               Remove marker
             </button>
-          </div>
+          </HexPanel>
         )}
 
         {/* 4. Save */}
-        <div style={{ ...sectionBox, marginTop: 'auto' }}>
-          <p style={{ fontSize: 17, color: '#4a6080', margin: 0 }}>
+        <HexPanel fill="linear-gradient(180deg, rgba(90,129,169,0.28) 0%, rgba(51,78,112,0.38) 100%)" style={{ marginTop: 'auto' }} contentStyle={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 12, alignItems: 'center' }}>
+          <p style={{ fontSize: 15, color: 'var(--fp-text-secondary)', fontWeight: 700, margin: 0, lineHeight: 1.45, textAlign: 'center' }}>
             {zones.length} shelf zone{zones.length !== 1 ? 's' : ''}
             {' · '}
             {walls.length} wall{walls.length !== 1 ? 's' : ''}
@@ -1093,15 +1176,14 @@ export default function MapZoneEditor({
             {markers.length} marker{markers.length !== 1 ? 's' : ''}
           </p>
           <button onClick={handleSave}
-            style={{ width: '100%', padding: '13px 0', borderRadius: 6, backgroundColor: '#31456B', color: '#fff', fontSize: 21, fontWeight: 700, border: 'none', cursor: 'pointer' }}>
+            style={{ ...primaryPanelButton, width: '100%' }}>
             Save layout
           </button>
-          {saved && <p style={{ fontSize: 17, fontWeight: 600, color: '#16a34a', margin: 0 }}>Saved!</p>}
-          <p style={{ fontSize: 15, color: '#7a95b0', margin: 0 }}>
-            Coordinates saved as 0–1 floats relative to canvas size
-          </p>
-        </div>
+          {saved && <p style={{ fontSize: 15, fontWeight: 800, color: '#14532d', margin: 0, textAlign: 'center' }}>Saved!</p>}
+        </HexPanel>
       </div>
     </div>
   )
-}
+})
+
+export default MapZoneEditor
