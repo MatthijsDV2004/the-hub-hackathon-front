@@ -21,13 +21,14 @@ const navLinkStyle = {
   display: "block",
   padding: "10px 14px",
   borderRadius: 10,
-  border: "1px solid var(--fp-panel-border)",
-  color: "var(--fp-text-secondary)",
+  border: "1px solid var(--fp-input-border)",
+  color: "var(--fp-text-primary)",
   fontSize: 15,
   fontWeight: 600,
   textDecoration: "none",
-  background: "var(--fp-input-bg)",
-  transition: "border-color 0.15s",
+  background: "var(--fp-surface-soft)",
+  boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.06)",
+  transition: "border-color 0.15s, filter 0.15s",
 } as React.CSSProperties;
 
 export default function Home() {
@@ -47,8 +48,28 @@ export default function Home() {
             Students can check current groceries before arriving. Staff can upload photos, review AI results, and manage inventory, hours, checkout updates, and events.
           </p>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
-            <Link href="/login" style={{ ...navLinkStyle, background: "var(--fp-success)", color: "#fff", border: "1px solid #5a7f56" }}>Login</Link>
-            <Link href="/student/inventory" style={{ ...navLinkStyle, background: "var(--fp-button-primary)", color: "#fff" }}>Student Inventory</Link>
+            <Link
+              href="/login"
+              style={{
+                ...navLinkStyle,
+                background: "var(--fp-success)",
+                color: "var(--fp-text-primary)",
+                border: "1px solid color-mix(in srgb, var(--fp-success), white 20%)",
+              }}
+            >
+              Login
+            </Link>
+            <Link
+              href="/student/inventory"
+              style={{
+                ...navLinkStyle,
+                background: "var(--fp-button-primary)",
+                color: "var(--fp-text-primary)",
+                border: "1px solid color-mix(in srgb, var(--fp-button-primary), white 24%)",
+              }}
+            >
+              Student Inventory
+            </Link>
             <Link href="/inventory" style={navLinkStyle}>Admin Upload</Link>
           </div>
         </HexPanel>

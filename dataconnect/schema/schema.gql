@@ -9,12 +9,14 @@ type User @table {
 }
 
 type HubInfo @table {
+
   name: String!
   hoursOfOperation: String!
   createdAt: Timestamp!
   updatedAt: Timestamp!
   description: String
   location: String
+  organization: String
 }
 
 type Shelf @table {
@@ -30,11 +32,17 @@ type InventoryItem @table {
   brand: String!
   quantity: Int!
   category: String
+  type: String
   createdAt: Timestamp!
   updatedAt: Timestamp!
   description: String
   photoUrl: String
   size: String
+  locationCenterX: Float
+  locationCenterY: Float
+  locationRadius: Float
+  imageWidth: Float
+  imageHeight: Float
 }
 
 type ShelfPhoto @table {

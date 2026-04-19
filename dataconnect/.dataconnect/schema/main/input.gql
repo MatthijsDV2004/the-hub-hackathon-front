@@ -1757,6 +1757,14 @@ input HubInfo_Data {
   """
   name_expr: String_Expr @fdc_forbiddenInVariables
   """
+  ✨ Generated from Field `HubInfo`.`organization` of type `String`
+  """
+  organization: String
+  """
+  ✨ `_expr` server value variant of `organization` (✨ Generated from Field `HubInfo`.`organization` of type `String`)
+  """
+  organization_expr: String_Expr @fdc_forbiddenInVariables
+  """
   ✨ Generated from Field `HubInfo`.`updatedAt` of type `Timestamp!`
   """
   updatedAt: Timestamp
@@ -1813,6 +1821,10 @@ input HubInfo_Filter {
   ✨ Generated from Field `HubInfo`.`name` of type `String!`
   """
   name: String_Filter
+  """
+  ✨ Generated from Field `HubInfo`.`organization` of type `String`
+  """
+  organization: String_Filter
   """
   ✨ Generated from Field `HubInfo`.`updatedAt` of type `Timestamp!`
   """
@@ -1879,6 +1891,10 @@ input HubInfo_Having {
   ✨ Generated from Field `HubInfo`.`name_count` of type `Int!`
   """
   name_count: Int_Filter
+  """
+  ✨ Generated from Field `HubInfo`.`organization_count` of type `Int!`
+  """
+  organization_count: Int_Filter
   """
   ✨ Generated from Field `HubInfo`.`updatedAt_count` of type `Int!`
   """
@@ -1955,6 +1971,10 @@ input HubInfo_Order {
   """
   name: OrderDirection
   """
+  ✨ Generated from Field `HubInfo`.`organization` of type `String`
+  """
+  organization: OrderDirection
+  """
   ✨ Generated from Field `HubInfo`.`updatedAt` of type `Timestamp!`
   """
   updatedAt: OrderDirection
@@ -1986,6 +2006,10 @@ input HubInfo_Order {
   ✨ Generated from Field `HubInfo`.`name_count` of type `Int!`
   """
   name_count: OrderDirection
+  """
+  ✨ Generated from Field `HubInfo`.`organization_count` of type `Int!`
+  """
+  organization_count: OrderDirection
   """
   ✨ Generated from Field `HubInfo`.`updatedAt_count` of type `Int!`
   """
@@ -2072,6 +2096,66 @@ input InventoryItem_Data {
   """
   description_expr: String_Expr @fdc_forbiddenInVariables
   """
+  ✨ Generated from Field `InventoryItem`.`imageHeight` of type `Float`
+  """
+  imageHeight: Float
+  """
+  ✨ `_expr` server value variant of `imageHeight` (✨ Generated from Field `InventoryItem`.`imageHeight` of type `Float`)
+  """
+  imageHeight_expr: Float_Expr @fdc_forbiddenInVariables
+  """
+  ✨ `_update` server value variant of `imageHeight` (✨ Generated from Field `InventoryItem`.`imageHeight` of type `Float`)
+  """
+  imageHeight_update: [Float_Update!] @fdc_forbiddenInVariables
+  """
+  ✨ Generated from Field `InventoryItem`.`imageWidth` of type `Float`
+  """
+  imageWidth: Float
+  """
+  ✨ `_expr` server value variant of `imageWidth` (✨ Generated from Field `InventoryItem`.`imageWidth` of type `Float`)
+  """
+  imageWidth_expr: Float_Expr @fdc_forbiddenInVariables
+  """
+  ✨ `_update` server value variant of `imageWidth` (✨ Generated from Field `InventoryItem`.`imageWidth` of type `Float`)
+  """
+  imageWidth_update: [Float_Update!] @fdc_forbiddenInVariables
+  """
+  ✨ Generated from Field `InventoryItem`.`locationCenterX` of type `Float`
+  """
+  locationCenterX: Float
+  """
+  ✨ `_expr` server value variant of `locationCenterX` (✨ Generated from Field `InventoryItem`.`locationCenterX` of type `Float`)
+  """
+  locationCenterX_expr: Float_Expr @fdc_forbiddenInVariables
+  """
+  ✨ `_update` server value variant of `locationCenterX` (✨ Generated from Field `InventoryItem`.`locationCenterX` of type `Float`)
+  """
+  locationCenterX_update: [Float_Update!] @fdc_forbiddenInVariables
+  """
+  ✨ Generated from Field `InventoryItem`.`locationCenterY` of type `Float`
+  """
+  locationCenterY: Float
+  """
+  ✨ `_expr` server value variant of `locationCenterY` (✨ Generated from Field `InventoryItem`.`locationCenterY` of type `Float`)
+  """
+  locationCenterY_expr: Float_Expr @fdc_forbiddenInVariables
+  """
+  ✨ `_update` server value variant of `locationCenterY` (✨ Generated from Field `InventoryItem`.`locationCenterY` of type `Float`)
+  """
+  locationCenterY_update: [Float_Update!] @fdc_forbiddenInVariables
+  """
+  ✨ Generated from Field `InventoryItem`.`locationRadius` of type `Float`
+  """
+  locationRadius: Float
+  """
+  ✨ `_expr` server value variant of `locationRadius` (✨ Generated from Field `InventoryItem`.`locationRadius` of type `Float`)
+  """
+  locationRadius_expr: Float_Expr @fdc_forbiddenInVariables
+  """
+  ✨ `_update` server value variant of `locationRadius` (✨ Generated from Field `InventoryItem`.`locationRadius` of type `Float`)
+  """
+  locationRadius_update: [Float_Update!] @fdc_forbiddenInVariables
+  """
   ✨ Generated from Field `InventoryItem`.`name` of type `String!`
   """
   name: String
@@ -2107,6 +2191,14 @@ input InventoryItem_Data {
   ✨ `_expr` server value variant of `size` (✨ Generated from Field `InventoryItem`.`size` of type `String`)
   """
   size_expr: String_Expr @fdc_forbiddenInVariables
+  """
+  ✨ Generated from Field `InventoryItem`.`type` of type `String`
+  """
+  type: String
+  """
+  ✨ `_expr` server value variant of `type` (✨ Generated from Field `InventoryItem`.`type` of type `String`)
+  """
+  type_expr: String_Expr @fdc_forbiddenInVariables
   """
   ✨ Generated from Field `InventoryItem`.`updatedAt` of type `Timestamp!`
   """
@@ -2169,6 +2261,26 @@ input InventoryItem_Filter {
   """
   description: String_Filter
   """
+  ✨ Generated from Field `InventoryItem`.`imageHeight` of type `Float`
+  """
+  imageHeight: Float_Filter
+  """
+  ✨ Generated from Field `InventoryItem`.`imageWidth` of type `Float`
+  """
+  imageWidth: Float_Filter
+  """
+  ✨ Generated from Field `InventoryItem`.`locationCenterX` of type `Float`
+  """
+  locationCenterX: Float_Filter
+  """
+  ✨ Generated from Field `InventoryItem`.`locationCenterY` of type `Float`
+  """
+  locationCenterY: Float_Filter
+  """
+  ✨ Generated from Field `InventoryItem`.`locationRadius` of type `Float`
+  """
+  locationRadius: Float_Filter
+  """
   ✨ Generated from Field `InventoryItem`.`name` of type `String!`
   """
   name: String_Filter
@@ -2184,6 +2296,10 @@ input InventoryItem_Filter {
   ✨ Generated from Field `InventoryItem`.`size` of type `String`
   """
   size: String_Filter
+  """
+  ✨ Generated from Field `InventoryItem`.`type` of type `String`
+  """
+  type: String_Filter
   """
   ✨ Generated from Field `InventoryItem`.`updatedAt` of type `Timestamp!`
   """
@@ -2247,6 +2363,26 @@ input InventoryItem_Having {
   """
   id_count: Int_Filter
   """
+  ✨ Generated from Field `InventoryItem`.`imageHeight_count` of type `Int!`
+  """
+  imageHeight_count: Int_Filter
+  """
+  ✨ Generated from Field `InventoryItem`.`imageWidth_count` of type `Int!`
+  """
+  imageWidth_count: Int_Filter
+  """
+  ✨ Generated from Field `InventoryItem`.`locationCenterX_count` of type `Int!`
+  """
+  locationCenterX_count: Int_Filter
+  """
+  ✨ Generated from Field `InventoryItem`.`locationCenterY_count` of type `Int!`
+  """
+  locationCenterY_count: Int_Filter
+  """
+  ✨ Generated from Field `InventoryItem`.`locationRadius_count` of type `Int!`
+  """
+  locationRadius_count: Int_Filter
+  """
   ✨ Generated from Field `InventoryItem`.`name_count` of type `Int!`
   """
   name_count: Int_Filter
@@ -2267,13 +2403,57 @@ input InventoryItem_Having {
   """
   size_count: Int_Filter
   """
+  ✨ Generated from Field `InventoryItem`.`type_count` of type `Int!`
+  """
+  type_count: Int_Filter
+  """
   ✨ Generated from Field `InventoryItem`.`updatedAt_count` of type `Int!`
   """
   updatedAt_count: Int_Filter
   """
+  ✨ Generated from Field `InventoryItem`.`imageHeight_sum` of type `Float`
+  """
+  imageHeight_sum: Float_Filter
+  """
+  ✨ Generated from Field `InventoryItem`.`imageWidth_sum` of type `Float`
+  """
+  imageWidth_sum: Float_Filter
+  """
+  ✨ Generated from Field `InventoryItem`.`locationCenterX_sum` of type `Float`
+  """
+  locationCenterX_sum: Float_Filter
+  """
+  ✨ Generated from Field `InventoryItem`.`locationCenterY_sum` of type `Float`
+  """
+  locationCenterY_sum: Float_Filter
+  """
+  ✨ Generated from Field `InventoryItem`.`locationRadius_sum` of type `Float`
+  """
+  locationRadius_sum: Float_Filter
+  """
   ✨ Generated from Field `InventoryItem`.`quantity_sum` of type `Int`
   """
   quantity_sum: Int_Filter
+  """
+  ✨ Generated from Field `InventoryItem`.`imageHeight_avg` of type `Float`
+  """
+  imageHeight_avg: Float_Filter
+  """
+  ✨ Generated from Field `InventoryItem`.`imageWidth_avg` of type `Float`
+  """
+  imageWidth_avg: Float_Filter
+  """
+  ✨ Generated from Field `InventoryItem`.`locationCenterX_avg` of type `Float`
+  """
+  locationCenterX_avg: Float_Filter
+  """
+  ✨ Generated from Field `InventoryItem`.`locationCenterY_avg` of type `Float`
+  """
+  locationCenterY_avg: Float_Filter
+  """
+  ✨ Generated from Field `InventoryItem`.`locationRadius_avg` of type `Float`
+  """
+  locationRadius_avg: Float_Filter
   """
   ✨ Generated from Field `InventoryItem`.`quantity_avg` of type `Float`
   """
@@ -2282,6 +2462,26 @@ input InventoryItem_Having {
   ✨ Generated from Field `InventoryItem`.`createdAt_min` of type `Timestamp`
   """
   createdAt_min: Timestamp_Filter
+  """
+  ✨ Generated from Field `InventoryItem`.`imageHeight_min` of type `Float`
+  """
+  imageHeight_min: Float_Filter
+  """
+  ✨ Generated from Field `InventoryItem`.`imageWidth_min` of type `Float`
+  """
+  imageWidth_min: Float_Filter
+  """
+  ✨ Generated from Field `InventoryItem`.`locationCenterX_min` of type `Float`
+  """
+  locationCenterX_min: Float_Filter
+  """
+  ✨ Generated from Field `InventoryItem`.`locationCenterY_min` of type `Float`
+  """
+  locationCenterY_min: Float_Filter
+  """
+  ✨ Generated from Field `InventoryItem`.`locationRadius_min` of type `Float`
+  """
+  locationRadius_min: Float_Filter
   """
   ✨ Generated from Field `InventoryItem`.`quantity_min` of type `Int`
   """
@@ -2294,6 +2494,26 @@ input InventoryItem_Having {
   ✨ Generated from Field `InventoryItem`.`createdAt_max` of type `Timestamp`
   """
   createdAt_max: Timestamp_Filter
+  """
+  ✨ Generated from Field `InventoryItem`.`imageHeight_max` of type `Float`
+  """
+  imageHeight_max: Float_Filter
+  """
+  ✨ Generated from Field `InventoryItem`.`imageWidth_max` of type `Float`
+  """
+  imageWidth_max: Float_Filter
+  """
+  ✨ Generated from Field `InventoryItem`.`locationCenterX_max` of type `Float`
+  """
+  locationCenterX_max: Float_Filter
+  """
+  ✨ Generated from Field `InventoryItem`.`locationCenterY_max` of type `Float`
+  """
+  locationCenterY_max: Float_Filter
+  """
+  ✨ Generated from Field `InventoryItem`.`locationRadius_max` of type `Float`
+  """
+  locationRadius_max: Float_Filter
   """
   ✨ Generated from Field `InventoryItem`.`quantity_max` of type `Int`
   """
@@ -2362,6 +2582,26 @@ input InventoryItem_Order {
   """
   description: OrderDirection
   """
+  ✨ Generated from Field `InventoryItem`.`imageHeight` of type `Float`
+  """
+  imageHeight: OrderDirection
+  """
+  ✨ Generated from Field `InventoryItem`.`imageWidth` of type `Float`
+  """
+  imageWidth: OrderDirection
+  """
+  ✨ Generated from Field `InventoryItem`.`locationCenterX` of type `Float`
+  """
+  locationCenterX: OrderDirection
+  """
+  ✨ Generated from Field `InventoryItem`.`locationCenterY` of type `Float`
+  """
+  locationCenterY: OrderDirection
+  """
+  ✨ Generated from Field `InventoryItem`.`locationRadius` of type `Float`
+  """
+  locationRadius: OrderDirection
+  """
   ✨ Generated from Field `InventoryItem`.`name` of type `String!`
   """
   name: OrderDirection
@@ -2377,6 +2617,10 @@ input InventoryItem_Order {
   ✨ Generated from Field `InventoryItem`.`size` of type `String`
   """
   size: OrderDirection
+  """
+  ✨ Generated from Field `InventoryItem`.`type` of type `String`
+  """
+  type: OrderDirection
   """
   ✨ Generated from Field `InventoryItem`.`updatedAt` of type `Timestamp!`
   """
@@ -2406,6 +2650,26 @@ input InventoryItem_Order {
   """
   id_count: OrderDirection
   """
+  ✨ Generated from Field `InventoryItem`.`imageHeight_count` of type `Int!`
+  """
+  imageHeight_count: OrderDirection
+  """
+  ✨ Generated from Field `InventoryItem`.`imageWidth_count` of type `Int!`
+  """
+  imageWidth_count: OrderDirection
+  """
+  ✨ Generated from Field `InventoryItem`.`locationCenterX_count` of type `Int!`
+  """
+  locationCenterX_count: OrderDirection
+  """
+  ✨ Generated from Field `InventoryItem`.`locationCenterY_count` of type `Int!`
+  """
+  locationCenterY_count: OrderDirection
+  """
+  ✨ Generated from Field `InventoryItem`.`locationRadius_count` of type `Int!`
+  """
+  locationRadius_count: OrderDirection
+  """
   ✨ Generated from Field `InventoryItem`.`name_count` of type `Int!`
   """
   name_count: OrderDirection
@@ -2426,13 +2690,57 @@ input InventoryItem_Order {
   """
   size_count: OrderDirection
   """
+  ✨ Generated from Field `InventoryItem`.`type_count` of type `Int!`
+  """
+  type_count: OrderDirection
+  """
   ✨ Generated from Field `InventoryItem`.`updatedAt_count` of type `Int!`
   """
   updatedAt_count: OrderDirection
   """
+  ✨ Generated from Field `InventoryItem`.`imageHeight_sum` of type `Float`
+  """
+  imageHeight_sum: OrderDirection
+  """
+  ✨ Generated from Field `InventoryItem`.`imageWidth_sum` of type `Float`
+  """
+  imageWidth_sum: OrderDirection
+  """
+  ✨ Generated from Field `InventoryItem`.`locationCenterX_sum` of type `Float`
+  """
+  locationCenterX_sum: OrderDirection
+  """
+  ✨ Generated from Field `InventoryItem`.`locationCenterY_sum` of type `Float`
+  """
+  locationCenterY_sum: OrderDirection
+  """
+  ✨ Generated from Field `InventoryItem`.`locationRadius_sum` of type `Float`
+  """
+  locationRadius_sum: OrderDirection
+  """
   ✨ Generated from Field `InventoryItem`.`quantity_sum` of type `Int`
   """
   quantity_sum: OrderDirection
+  """
+  ✨ Generated from Field `InventoryItem`.`imageHeight_avg` of type `Float`
+  """
+  imageHeight_avg: OrderDirection
+  """
+  ✨ Generated from Field `InventoryItem`.`imageWidth_avg` of type `Float`
+  """
+  imageWidth_avg: OrderDirection
+  """
+  ✨ Generated from Field `InventoryItem`.`locationCenterX_avg` of type `Float`
+  """
+  locationCenterX_avg: OrderDirection
+  """
+  ✨ Generated from Field `InventoryItem`.`locationCenterY_avg` of type `Float`
+  """
+  locationCenterY_avg: OrderDirection
+  """
+  ✨ Generated from Field `InventoryItem`.`locationRadius_avg` of type `Float`
+  """
+  locationRadius_avg: OrderDirection
   """
   ✨ Generated from Field `InventoryItem`.`quantity_avg` of type `Float`
   """
@@ -2441,6 +2749,26 @@ input InventoryItem_Order {
   ✨ Generated from Field `InventoryItem`.`createdAt_min` of type `Timestamp`
   """
   createdAt_min: OrderDirection
+  """
+  ✨ Generated from Field `InventoryItem`.`imageHeight_min` of type `Float`
+  """
+  imageHeight_min: OrderDirection
+  """
+  ✨ Generated from Field `InventoryItem`.`imageWidth_min` of type `Float`
+  """
+  imageWidth_min: OrderDirection
+  """
+  ✨ Generated from Field `InventoryItem`.`locationCenterX_min` of type `Float`
+  """
+  locationCenterX_min: OrderDirection
+  """
+  ✨ Generated from Field `InventoryItem`.`locationCenterY_min` of type `Float`
+  """
+  locationCenterY_min: OrderDirection
+  """
+  ✨ Generated from Field `InventoryItem`.`locationRadius_min` of type `Float`
+  """
+  locationRadius_min: OrderDirection
   """
   ✨ Generated from Field `InventoryItem`.`quantity_min` of type `Int`
   """
@@ -2453,6 +2781,26 @@ input InventoryItem_Order {
   ✨ Generated from Field `InventoryItem`.`createdAt_max` of type `Timestamp`
   """
   createdAt_max: OrderDirection
+  """
+  ✨ Generated from Field `InventoryItem`.`imageHeight_max` of type `Float`
+  """
+  imageHeight_max: OrderDirection
+  """
+  ✨ Generated from Field `InventoryItem`.`imageWidth_max` of type `Float`
+  """
+  imageWidth_max: OrderDirection
+  """
+  ✨ Generated from Field `InventoryItem`.`locationCenterX_max` of type `Float`
+  """
+  locationCenterX_max: OrderDirection
+  """
+  ✨ Generated from Field `InventoryItem`.`locationCenterY_max` of type `Float`
+  """
+  locationCenterY_max: OrderDirection
+  """
+  ✨ Generated from Field `InventoryItem`.`locationRadius_max` of type `Float`
+  """
+  locationRadius_max: OrderDirection
   """
   ✨ Generated from Field `InventoryItem`.`quantity_max` of type `Int`
   """

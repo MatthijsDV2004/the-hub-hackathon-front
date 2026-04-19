@@ -726,6 +726,15 @@ extend type HubInfo {
     distinct: Boolean = false
   ): Int! @fdc_generated(from: "HubInfo.name", purpose: QUERY_COUNT)
   """
+  ✨ Count the number of rows in the `HubInfo` table where the `organization` field is non-null. Pass the `distinct` argument to instead count the number of distinct values.
+  """
+  organization_count(
+    """
+    Set to true to count the number of distinct values.
+    """
+    distinct: Boolean = false
+  ): Int! @fdc_generated(from: "HubInfo.organization", purpose: QUERY_COUNT)
+  """
   ✨ Count the number of rows in the `HubInfo` table where the `updatedAt` field is non-null. Pass the `distinct` argument to instead count the number of distinct values.
   """
   updatedAt_count(
@@ -810,6 +819,51 @@ extend type InventoryItem {
     distinct: Boolean = false
   ): Int! @fdc_generated(from: "InventoryItem.id", purpose: QUERY_COUNT)
   """
+  ✨ Count the number of rows in the `InventoryItem` table where the `imageHeight` field is non-null. Pass the `distinct` argument to instead count the number of distinct values.
+  """
+  imageHeight_count(
+    """
+    Set to true to count the number of distinct values.
+    """
+    distinct: Boolean = false
+  ): Int! @fdc_generated(from: "InventoryItem.imageHeight", purpose: QUERY_COUNT)
+  """
+  ✨ Count the number of rows in the `InventoryItem` table where the `imageWidth` field is non-null. Pass the `distinct` argument to instead count the number of distinct values.
+  """
+  imageWidth_count(
+    """
+    Set to true to count the number of distinct values.
+    """
+    distinct: Boolean = false
+  ): Int! @fdc_generated(from: "InventoryItem.imageWidth", purpose: QUERY_COUNT)
+  """
+  ✨ Count the number of rows in the `InventoryItem` table where the `locationCenterX` field is non-null. Pass the `distinct` argument to instead count the number of distinct values.
+  """
+  locationCenterX_count(
+    """
+    Set to true to count the number of distinct values.
+    """
+    distinct: Boolean = false
+  ): Int! @fdc_generated(from: "InventoryItem.locationCenterX", purpose: QUERY_COUNT)
+  """
+  ✨ Count the number of rows in the `InventoryItem` table where the `locationCenterY` field is non-null. Pass the `distinct` argument to instead count the number of distinct values.
+  """
+  locationCenterY_count(
+    """
+    Set to true to count the number of distinct values.
+    """
+    distinct: Boolean = false
+  ): Int! @fdc_generated(from: "InventoryItem.locationCenterY", purpose: QUERY_COUNT)
+  """
+  ✨ Count the number of rows in the `InventoryItem` table where the `locationRadius` field is non-null. Pass the `distinct` argument to instead count the number of distinct values.
+  """
+  locationRadius_count(
+    """
+    Set to true to count the number of distinct values.
+    """
+    distinct: Boolean = false
+  ): Int! @fdc_generated(from: "InventoryItem.locationRadius", purpose: QUERY_COUNT)
+  """
   ✨ Count the number of rows in the `InventoryItem` table where the `name` field is non-null. Pass the `distinct` argument to instead count the number of distinct values.
   """
   name_count(
@@ -855,6 +909,15 @@ extend type InventoryItem {
     distinct: Boolean = false
   ): Int! @fdc_generated(from: "InventoryItem.size", purpose: QUERY_COUNT)
   """
+  ✨ Count the number of rows in the `InventoryItem` table where the `type` field is non-null. Pass the `distinct` argument to instead count the number of distinct values.
+  """
+  type_count(
+    """
+    Set to true to count the number of distinct values.
+    """
+    distinct: Boolean = false
+  ): Int! @fdc_generated(from: "InventoryItem.type", purpose: QUERY_COUNT)
+  """
   ✨ Count the number of rows in the `InventoryItem` table where the `updatedAt` field is non-null. Pass the `distinct` argument to instead count the number of distinct values.
   """
   updatedAt_count(
@@ -864,6 +927,51 @@ extend type InventoryItem {
     distinct: Boolean = false
   ): Int! @fdc_generated(from: "InventoryItem.updatedAt", purpose: QUERY_COUNT)
   """
+  ✨ Sum the `imageHeight` field in the `InventoryItem` table.
+  """
+  imageHeight_sum(
+    """
+    Set to true to sum the distinct values.
+    """
+    distinct: Boolean = false
+  ): Float @fdc_generated(from: "InventoryItem.imageHeight", purpose: QUERY_SUM)
+  """
+  ✨ Sum the `imageWidth` field in the `InventoryItem` table.
+  """
+  imageWidth_sum(
+    """
+    Set to true to sum the distinct values.
+    """
+    distinct: Boolean = false
+  ): Float @fdc_generated(from: "InventoryItem.imageWidth", purpose: QUERY_SUM)
+  """
+  ✨ Sum the `locationCenterX` field in the `InventoryItem` table.
+  """
+  locationCenterX_sum(
+    """
+    Set to true to sum the distinct values.
+    """
+    distinct: Boolean = false
+  ): Float @fdc_generated(from: "InventoryItem.locationCenterX", purpose: QUERY_SUM)
+  """
+  ✨ Sum the `locationCenterY` field in the `InventoryItem` table.
+  """
+  locationCenterY_sum(
+    """
+    Set to true to sum the distinct values.
+    """
+    distinct: Boolean = false
+  ): Float @fdc_generated(from: "InventoryItem.locationCenterY", purpose: QUERY_SUM)
+  """
+  ✨ Sum the `locationRadius` field in the `InventoryItem` table.
+  """
+  locationRadius_sum(
+    """
+    Set to true to sum the distinct values.
+    """
+    distinct: Boolean = false
+  ): Float @fdc_generated(from: "InventoryItem.locationRadius", purpose: QUERY_SUM)
+  """
   ✨ Sum the `quantity` field in the `InventoryItem` table.
   """
   quantity_sum(
@@ -872,6 +980,51 @@ extend type InventoryItem {
     """
     distinct: Boolean = false
   ): Int @fdc_generated(from: "InventoryItem.quantity", purpose: QUERY_SUM)
+  """
+  ✨ Average the `imageHeight` field in the `InventoryItem` table.
+  """
+  imageHeight_avg(
+    """
+    Set to true to average the distinct values.
+    """
+    distinct: Boolean = false
+  ): Float @fdc_generated(from: "InventoryItem.imageHeight", purpose: QUERY_AVG)
+  """
+  ✨ Average the `imageWidth` field in the `InventoryItem` table.
+  """
+  imageWidth_avg(
+    """
+    Set to true to average the distinct values.
+    """
+    distinct: Boolean = false
+  ): Float @fdc_generated(from: "InventoryItem.imageWidth", purpose: QUERY_AVG)
+  """
+  ✨ Average the `locationCenterX` field in the `InventoryItem` table.
+  """
+  locationCenterX_avg(
+    """
+    Set to true to average the distinct values.
+    """
+    distinct: Boolean = false
+  ): Float @fdc_generated(from: "InventoryItem.locationCenterX", purpose: QUERY_AVG)
+  """
+  ✨ Average the `locationCenterY` field in the `InventoryItem` table.
+  """
+  locationCenterY_avg(
+    """
+    Set to true to average the distinct values.
+    """
+    distinct: Boolean = false
+  ): Float @fdc_generated(from: "InventoryItem.locationCenterY", purpose: QUERY_AVG)
+  """
+  ✨ Average the `locationRadius` field in the `InventoryItem` table.
+  """
+  locationRadius_avg(
+    """
+    Set to true to average the distinct values.
+    """
+    distinct: Boolean = false
+  ): Float @fdc_generated(from: "InventoryItem.locationRadius", purpose: QUERY_AVG)
   """
   ✨ Average the `quantity` field in the `InventoryItem` table.
   """
@@ -886,6 +1039,26 @@ extend type InventoryItem {
   """
   createdAt_min: Timestamp @fdc_generated(from: "InventoryItem.createdAt", purpose: QUERY_MIN)
   """
+  ✨ Minimum of the `imageHeight` field in the `InventoryItem` table.
+  """
+  imageHeight_min: Float @fdc_generated(from: "InventoryItem.imageHeight", purpose: QUERY_MIN)
+  """
+  ✨ Minimum of the `imageWidth` field in the `InventoryItem` table.
+  """
+  imageWidth_min: Float @fdc_generated(from: "InventoryItem.imageWidth", purpose: QUERY_MIN)
+  """
+  ✨ Minimum of the `locationCenterX` field in the `InventoryItem` table.
+  """
+  locationCenterX_min: Float @fdc_generated(from: "InventoryItem.locationCenterX", purpose: QUERY_MIN)
+  """
+  ✨ Minimum of the `locationCenterY` field in the `InventoryItem` table.
+  """
+  locationCenterY_min: Float @fdc_generated(from: "InventoryItem.locationCenterY", purpose: QUERY_MIN)
+  """
+  ✨ Minimum of the `locationRadius` field in the `InventoryItem` table.
+  """
+  locationRadius_min: Float @fdc_generated(from: "InventoryItem.locationRadius", purpose: QUERY_MIN)
+  """
   ✨ Minimum of the `quantity` field in the `InventoryItem` table.
   """
   quantity_min: Int @fdc_generated(from: "InventoryItem.quantity", purpose: QUERY_MIN)
@@ -897,6 +1070,26 @@ extend type InventoryItem {
   ✨ Maximum of the `createdAt` field in the `InventoryItem` table.
   """
   createdAt_max: Timestamp @fdc_generated(from: "InventoryItem.createdAt", purpose: QUERY_MAX)
+  """
+  ✨ Maximum of the `imageHeight` field in the `InventoryItem` table.
+  """
+  imageHeight_max: Float @fdc_generated(from: "InventoryItem.imageHeight", purpose: QUERY_MAX)
+  """
+  ✨ Maximum of the `imageWidth` field in the `InventoryItem` table.
+  """
+  imageWidth_max: Float @fdc_generated(from: "InventoryItem.imageWidth", purpose: QUERY_MAX)
+  """
+  ✨ Maximum of the `locationCenterX` field in the `InventoryItem` table.
+  """
+  locationCenterX_max: Float @fdc_generated(from: "InventoryItem.locationCenterX", purpose: QUERY_MAX)
+  """
+  ✨ Maximum of the `locationCenterY` field in the `InventoryItem` table.
+  """
+  locationCenterY_max: Float @fdc_generated(from: "InventoryItem.locationCenterY", purpose: QUERY_MAX)
+  """
+  ✨ Maximum of the `locationRadius` field in the `InventoryItem` table.
+  """
+  locationRadius_max: Float @fdc_generated(from: "InventoryItem.locationRadius", purpose: QUERY_MAX)
   """
   ✨ Maximum of the `quantity` field in the `InventoryItem` table.
   """
