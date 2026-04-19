@@ -411,10 +411,10 @@ export default function CheckoutPage() {
         <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
           <div>
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-              Admin Checkout Scanner
+              Admin Checkout
             </p>
             <h1 className="mt-1 text-2xl font-semibold tracking-tight text-slate-900 md:text-3xl">
-              Capture Checkout Photo and Update Database
+              Minimal Item Checkout
             </h1>
           </div>
           <Link
@@ -426,7 +426,7 @@ export default function CheckoutPage() {
         </div>
 
         <p className="mb-6 max-w-4xl text-sm text-slate-600 md:text-base">
-          Simple workflow: take a checkout photo, detect selected items, and decrement inventory in one step.
+          Minimal workflow: upload one checkout photo, detect selected items, and decrement inventory.
         </p>
 
         <form className="grid gap-6 xl:grid-cols-[1fr_1.1fr]" onSubmit={onProcessCheckout}>
@@ -555,7 +555,7 @@ export default function CheckoutPage() {
             <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
               <h2 className="mb-3 text-sm font-semibold text-slate-800">Detected checkout items</h2>
 
-              <div className="hidden max-h-[22rem] overflow-auto rounded-lg border border-slate-200 bg-white md:block">
+              <div className="hidden max-h-88 overflow-auto rounded-lg border border-slate-200 bg-white md:block">
                 <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
                   <thead className="bg-slate-100 text-slate-700">
                     <tr>

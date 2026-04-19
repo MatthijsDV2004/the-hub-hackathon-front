@@ -1,5 +1,12 @@
 import { randomUUID } from "crypto";
 import { executeDataConnect } from "@/lib/dataconnect";
+import {
+  extractHubDomainMarker,
+  isHubVisibleToDomain,
+  stripHubDomainMarker,
+  withHubDomainMarker,
+} from "@/lib/auth/hub-domain";
+import { requireAdminHubSession, requireHubSession } from "@/lib/auth/request";
 
 type InventoryItemRow = {
   id?: string | null;
@@ -8,8 +15,10 @@ type InventoryItemRow = {
   brand?: string;
   name?: string;
   quantity?: number;
+  size?: string;
   "package-size"?: string;
   category?: string;
+  type?: string;
   description?: string;
   photoUrl?: string;
   locationCenterX?: number | null;
@@ -48,6 +57,7 @@ type StudentInventoryItem = {
   brand: string;
   quantity: number;
   category: string | null;
+  type: string | null;
   createdAt: string | null;
   updatedAt: string | null;
   description: string | null;
@@ -64,6 +74,7 @@ type NormalizedRow = {
   quantity: number;
   size: string | null;
   category: string | null;
+  type: string | null;
   description: string | null;
   photoUrl: string;
   createdAt: string;
@@ -80,6 +91,7 @@ mutation InsertInventoryItem(
   $quantity: Int
   $size: String
   $category: String
+  $type: String
   $description: String
   $photoUrl: String
   $locationCenterX: Float
@@ -99,6 +111,7 @@ mutation InsertInventoryItem(
       quantity: $quantity
       size: $size
       category: $category
+      type: $type
       description: $description
       photoUrl: $photoUrl
       locationCenterX: $locationCenterX
@@ -179,6 +192,7 @@ query StudentInventory {
     brand
     quantity
     category
+    type
     createdAt
     updatedAt
     description
@@ -222,12 +236,6 @@ mutation DeleteInventoryItem($id: UUID) {
 }
 `.trim();
 
-const DEFAULT_DELETE_ALL_MUTATION = `
-mutation DeleteAllInventoryItems {
-  inventoryItem_deleteMany(all: true)
-}
-`.trim();
-
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -239,6 +247,8 @@ const LOCATION_SCHEMA_FIELDS = [
   "imageWidth",
   "imageHeight",
 ];
+
+const TYPE_SCHEMA_FIELDS = ["type"];
 
 function normalizeUuid(value: string | null | undefined) {
   const trimmed = value?.trim() || "";
@@ -365,9 +375,11 @@ function appendLocationMarker(description: string | null, location: ItemLocation
 
 function isLocationSchemaMismatch(error: unknown) {
   const message = error instanceof Error ? error.message : String(error || "");
-  const mentionsLocationField = LOCATION_SCHEMA_FIELDS.some((field) => message.includes(field));
+  const mentionsKnownField = [...LOCATION_SCHEMA_FIELDS, ...TYPE_SCHEMA_FIELDS].some((field) =>
+    message.includes(field)
+  );
 
-  if (!mentionsLocationField) {
+  if (!mentionsKnownField) {
     return false;
   }
 
@@ -393,8 +405,9 @@ function normalizeItem(item: InventoryItemRow): NormalizedRow | null {
 
   const id = normalizeUuid(item.id) || randomUUID();
   const shelfId = normalizeUuid(item.shelfId);
-  const size = item["package-size"]?.trim() || null;
+  const size = item.size?.trim() || item["package-size"]?.trim() || null;
   const category = item.category?.trim() || null;
+  const type = item.type?.trim() || null;
   const sku = item.sku?.trim() || "";
   const explicitBrand = item.brand?.trim() || "";
   const quantityRaw = Number(item.quantity);
@@ -412,6 +425,7 @@ function normalizeItem(item: InventoryItemRow): NormalizedRow | null {
     quantity,
     size,
     category,
+    type,
     description: cleanDescription,
     photoUrl,
     createdAt: nowIso,
@@ -488,6 +502,33 @@ function normalizeShelf(value: unknown): ShelfSummary | null {
   };
 }
 
+function sanitizeShelfForClient(shelf: ShelfSummary | null) {
+  if (!shelf) {
+    return null;
+  }
+
+  return {
+    ...shelf,
+    locationDescription: stripHubDomainMarker(shelf.locationDescription),
+  };
+}
+
+function sanitizeItemForClient(item: StudentInventoryItem): StudentInventoryItem {
+  return {
+    ...item,
+    shelf: sanitizeShelfForClient(item.shelf),
+  };
+}
+
+function isItemVisibleToHub(item: StudentInventoryItem, hubDomain: string) {
+  const markerDomain = extractHubDomainMarker(item.shelf?.locationDescription || null);
+  return isHubVisibleToDomain(markerDomain, hubDomain);
+}
+
+function filterItemsByHubDomain(items: StudentInventoryItem[], hubDomain: string) {
+  return items.filter((item) => isItemVisibleToHub(item, hubDomain));
+}
+
 function normalizeStudentInventoryItem(value: unknown): StudentInventoryItem | null {
   if (!value || typeof value !== "object") {
     return null;
@@ -521,6 +562,7 @@ function normalizeStudentInventoryItem(value: unknown): StudentInventoryItem | n
     brand: readString(row.brand) || "Unknown",
     quantity,
     category: readString(row.category),
+    type: readString(row.type),
     createdAt: readString(row.createdAt),
     updatedAt: readString(row.updatedAt),
     description: parsedDescription.description,
@@ -560,12 +602,17 @@ function extractItemRows(data: Record<string, unknown> | null) {
 function filterItems(
   items: StudentInventoryItem[],
   search: string,
-  shelfId: string | null
+  shelfId: string | null,
+  hubDomain: string
 ) {
   const normalizedSearch = normalizeText(search);
   const normalizedShelfId = normalizeUuid(shelfId);
 
   return items.filter((item) => {
+    if (!isItemVisibleToHub(item, hubDomain)) {
+      return false;
+    }
+
     if (normalizedShelfId && item.shelfId !== normalizedShelfId) {
       return false;
     }
@@ -579,6 +626,7 @@ function filterItems(
         item.name,
         item.brand,
         item.category,
+        item.type,
         item.size,
         item.description,
         item.shelf?.name,
@@ -592,7 +640,7 @@ function filterItems(
   });
 }
 
-async function ensureUploadShelf(body: SaveInventoryItemsBody) {
+async function ensureUploadShelf(body: SaveInventoryItemsBody, hubDomain: string) {
   const providedShelfId = normalizeUuid(body.shelfId);
   if (providedShelfId) {
     return {
@@ -608,8 +656,10 @@ async function ensureUploadShelf(body: SaveInventoryItemsBody) {
   const nowIso = new Date().toISOString();
   const shelfId = randomUUID();
   const shelfName = body.shelfName?.trim() || `Upload ${nowIso.slice(0, 16).replace("T", " ")}`;
-  const shelfLocationDescription =
-    body.shelfLocationDescription?.trim() || "Generated from inventory photo upload";
+  const shelfLocationDescription = withHubDomainMarker(
+    body.shelfLocationDescription?.trim() || "Generated from inventory photo upload",
+    hubDomain
+  );
 
   await executeDataConnect(DEFAULT_SHELF_INSERT_MUTATION, {
     id: shelfId,
@@ -624,9 +674,40 @@ async function ensureUploadShelf(body: SaveInventoryItemsBody) {
     shelf: {
       id: shelfId,
       name: shelfName,
-      locationDescription: shelfLocationDescription,
+      locationDescription: stripHubDomainMarker(shelfLocationDescription),
     } as ShelfSummary,
   };
+}
+
+async function listAllInventoryItems() {
+  const customQuery = process.env.FIREBASE_DATA_CONNECT_LIST_QUERY?.trim() || null;
+  const { data } = await executeInventoryListQuery(1000, customQuery);
+
+  return extractItemRows(data)
+    .map(normalizeStudentInventoryItem)
+    .filter((row): row is StudentInventoryItem => row !== null);
+}
+
+function buildKnownShelfDomainMap(items: StudentInventoryItem[]) {
+  const map = new Map<string, string | null>();
+
+  for (const item of items) {
+    if (!item.shelfId) {
+      continue;
+    }
+
+    const markerDomain = extractHubDomainMarker(item.shelf?.locationDescription || null);
+    if (markerDomain) {
+      map.set(item.shelfId, markerDomain);
+      continue;
+    }
+
+    if (!map.has(item.shelfId)) {
+      map.set(item.shelfId, null);
+    }
+  }
+
+  return map;
 }
 
 function buildListQuery(limit: number, includeLocationFields: boolean) {
@@ -669,6 +750,7 @@ async function executeDefaultInsertWithFallback(rowsWithShelf: NormalizedRow[]) 
       quantity: row.quantity,
       size: row.size,
       category: row.category,
+      type: row.type,
       photoUrl: row.photoUrl,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
@@ -708,11 +790,20 @@ async function executeDefaultInsertWithFallback(rowsWithShelf: NormalizedRow[]) 
     savedCount += 1;
   }
 
-  return savedCount;
+  return {
+    savedCount,
+    persistenceMode: useLegacyMutation ? "description-marker" : "location-columns",
+  } as const;
 }
 
 export async function GET(request: Request) {
   try {
+    const sessionResult = await requireHubSession(request);
+    if (!sessionResult.ok) {
+      return sessionResult.response;
+    }
+
+    const session = sessionResult.session;
     const url = new URL(request.url);
     const limit = normalizeListLimit(url.searchParams.get("limit"));
     const search = url.searchParams.get("search") || "";
@@ -725,16 +816,19 @@ export async function GET(request: Request) {
       .filter((row): row is StudentInventoryItem => row !== null)
       .sort((a, b) => toEpoch(b.updatedAt) - toEpoch(a.updatedAt));
 
-    const items = filterItems(allItems, search, shelfId);
+    const scopedItems = filterItemsByHubDomain(allItems, session.hubDomain);
+    const items = filterItems(scopedItems, search, shelfId, session.hubDomain).map(
+      sanitizeItemForClient
+    );
 
     const shelfMap = new Map<string, ShelfSummary>();
-    for (const item of allItems) {
+    for (const item of scopedItems) {
       if (!item.shelfId) {
         continue;
       }
 
       if (item.shelf) {
-        shelfMap.set(item.shelfId, item.shelf);
+        shelfMap.set(item.shelfId, sanitizeShelfForClient(item.shelf) as ShelfSummary);
         continue;
       }
 
@@ -764,6 +858,12 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
+    const sessionResult = await requireAdminHubSession(request);
+    if (!sessionResult.ok) {
+      return sessionResult.response;
+    }
+
+    const session = sessionResult.session;
     const body = (await request.json()) as SaveInventoryItemsBody;
     const rows = Array.isArray(body.items) ? body.items : [];
 
@@ -779,16 +879,49 @@ export async function POST(request: Request) {
       return Response.json({ error: "No valid items with names to save." }, { status: 400 });
     }
 
-    const { shelfId: uploadShelfId, shelf } = await ensureUploadShelf(body);
+    const { shelfId: uploadShelfId, shelf } = await ensureUploadShelf(body, session.hubDomain);
 
     const rowsWithShelf = normalizedRows.map((row) => ({
       ...row,
       shelfId: normalizeUuid(row.shelfId) || uploadShelfId,
     }));
+    const withLocationCount = rowsWithShelf.filter((row) => Boolean(row.location)).length;
+
+    const existingItems = await listAllInventoryItems();
+    const shelfDomainMap = buildKnownShelfDomainMap(existingItems);
+    shelfDomainMap.set(uploadShelfId, session.hubDomain);
+
+    for (const row of rowsWithShelf) {
+      if (!row.shelfId) {
+        continue;
+      }
+
+      if (row.shelfId !== uploadShelfId && !shelfDomainMap.has(row.shelfId)) {
+        return Response.json(
+          { error: `Unknown shelfId: ${row.shelfId}` },
+          { status: 400 }
+        );
+      }
+
+      const shelfDomain = shelfDomainMap.get(row.shelfId);
+      if (!isHubVisibleToDomain(shelfDomain, session.hubDomain)) {
+        return Response.json(
+          {
+            error:
+              "You can only save inventory into shelves that belong to your university hub.",
+          },
+          { status: 403 }
+        );
+      }
+    }
 
     const customMutation = process.env.FIREBASE_DATA_CONNECT_INSERT_MUTATION?.trim();
 
     if (customMutation) {
+      const customMutationSupportsLocationColumns = LOCATION_SCHEMA_FIELDS.every((field) =>
+        customMutation.includes(field)
+      );
+
       const customMutationItems = rowsWithShelf.map((row) => ({
         id: row.id,
         shelfId: row.shelfId,
@@ -797,7 +930,10 @@ export async function POST(request: Request) {
         quantity: row.quantity,
         size: row.size,
         category: row.category,
-        description: row.description,
+        type: row.type,
+        description: customMutationSupportsLocationColumns
+          ? row.description
+          : appendLocationMarker(row.description, row.location),
         photoUrl: row.photoUrl,
         locationCenterX: row.location?.centerX ?? null,
         locationCenterY: row.location?.centerY ?? null,
@@ -815,6 +951,13 @@ export async function POST(request: Request) {
         return Response.json({
           savedCount: inferSavedCount(data, rowsWithShelf.length),
           shelf,
+          metadata: {
+            requestedCount: rowsWithShelf.length,
+            withLocationCount,
+              persistenceMode: customMutationSupportsLocationColumns
+                ? "custom-mutation-location-columns"
+                : "custom-mutation-description-marker",
+          },
         });
       } catch (error) {
         if (!isLocationSchemaMismatch(error)) {
@@ -823,9 +966,17 @@ export async function POST(request: Request) {
       }
     }
 
-    const savedCount = await executeDefaultInsertWithFallback(rowsWithShelf);
+    const insertResult = await executeDefaultInsertWithFallback(rowsWithShelf);
 
-    return Response.json({ savedCount, shelf });
+    return Response.json({
+      savedCount: insertResult.savedCount,
+      shelf,
+      metadata: {
+        requestedCount: rowsWithShelf.length,
+        withLocationCount,
+        persistenceMode: insertResult.persistenceMode,
+      },
+    });
   } catch (error) {
     const message =
       error instanceof Error
@@ -838,6 +989,12 @@ export async function POST(request: Request) {
 
 export async function DELETE(request: Request) {
   try {
+    const sessionResult = await requireAdminHubSession(request);
+    if (!sessionResult.ok) {
+      return sessionResult.response;
+    }
+
+    const session = sessionResult.session;
     const url = new URL(request.url);
     const scope = (url.searchParams.get("scope") || "").toLowerCase();
 
@@ -849,10 +1006,20 @@ export async function DELETE(request: Request) {
     }
 
     if (scope === "all") {
-      const { data } = await executeDataConnect(DEFAULT_DELETE_ALL_MUTATION);
+      const allItems = await listAllInventoryItems();
+      const scopedItems = filterItemsByHubDomain(allItems, session.hubDomain);
+
+      let deletedCount = 0;
+      for (const row of scopedItems) {
+        await executeDataConnect(DEFAULT_DELETE_SINGLE_MUTATION, {
+          id: row.id,
+        });
+        deletedCount += 1;
+      }
+
       return Response.json({
         scope,
-        deletedCount: inferSavedCount(data, 0),
+        deletedCount,
       });
     }
 
@@ -860,6 +1027,20 @@ export async function DELETE(request: Request) {
       const itemId = normalizeUuid(url.searchParams.get("itemId"));
       if (!itemId) {
         return Response.json({ error: "Missing or invalid itemId." }, { status: 400 });
+      }
+
+      const allItems = await listAllInventoryItems();
+      const target = allItems.find((row) => row.id === itemId) || null;
+
+      if (!target) {
+        return Response.json({ error: "Item not found." }, { status: 404 });
+      }
+
+      if (!isItemVisibleToHub(target, session.hubDomain)) {
+        return Response.json(
+          { error: "You cannot delete items from a different hub." },
+          { status: 403 }
+        );
       }
 
       const { data } = await executeDataConnect(DEFAULT_DELETE_SINGLE_MUTATION, {
@@ -882,13 +1063,26 @@ export async function DELETE(request: Request) {
         return Response.json({ error: "Missing or invalid shelfId." }, { status: 400 });
       }
 
-      const customQuery = process.env.FIREBASE_DATA_CONNECT_LIST_QUERY?.trim() || null;
-      const { data } = await executeInventoryListQuery(1000, customQuery);
+      const allItems = await listAllInventoryItems();
 
-      const shelfItems = extractItemRows(data)
-        .map(normalizeStudentInventoryItem)
-        .filter((row): row is StudentInventoryItem => row !== null)
+      const shelfItems = allItems
         .filter((row) => row.shelfId === shelfId);
+
+      if (!shelfItems.length) {
+        return Response.json({ scope, shelfId, deletedCount: 0 });
+      }
+
+      const shelfDomain = extractHubDomainMarker(
+        shelfItems.find((row) => row.shelf?.locationDescription)?.shelf?.locationDescription ||
+          null
+      );
+
+      if (!isHubVisibleToDomain(shelfDomain, session.hubDomain)) {
+        return Response.json(
+          { error: "You cannot delete shelves from a different hub." },
+          { status: 403 }
+        );
+      }
 
       let deletedCount = 0;
       for (const row of shelfItems) {

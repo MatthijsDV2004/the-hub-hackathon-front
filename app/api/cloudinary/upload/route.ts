@@ -1,4 +1,5 @@
 import { createHash } from "crypto";
+import { requireAdminHubSession } from "@/lib/auth/request";
 
 type CloudinaryUploadBody = {
   imageBase64?: string;
@@ -30,19 +31,34 @@ function signCloudinaryParams(params: Record<string, string>, apiSecret: string)
   return createHash("sha1").update(`${toSign}${apiSecret}`).digest("hex");
 }
 
-function resolveUploadFolder(shelfName: string | undefined) {
+function resolveUploadFolder(shelfName: string | undefined, hubDomain: string) {
   const rootFolder = readEnv("CLOUDINARY_UPLOAD_FOLDER") || "hub-inventory";
+  const domainSegment = slugify(hubDomain.replace(/\./g, "-"));
   const shelfSegment = shelfName ? slugify(shelfName) : "";
 
-  if (!shelfSegment) {
+  if (!domainSegment && !shelfSegment) {
     return rootFolder;
   }
 
-  return `${rootFolder}/${shelfSegment}`;
+  if (!domainSegment) {
+    return `${rootFolder}/${shelfSegment}`;
+  }
+
+  if (!shelfSegment) {
+    return `${rootFolder}/${domainSegment}`;
+  }
+
+  return `${rootFolder}/${domainSegment}/${shelfSegment}`;
 }
 
 export async function POST(request: Request) {
   try {
+    const sessionResult = await requireAdminHubSession(request);
+    if (!sessionResult.ok) {
+      return sessionResult.response;
+    }
+
+    const session = sessionResult.session;
     const cloudName = readEnv("CLOUDINARY_CLOUD_NAME");
     const apiKey = readEnv("CLOUDINARY_API_KEY");
     const apiSecret = readEnv("CLOUDINARY_API_SECRET");
@@ -70,7 +86,7 @@ export async function POST(request: Request) {
     }
 
     const timestamp = Math.floor(Date.now() / 1000).toString();
-    const folder = resolveUploadFolder(body.shelfName);
+    const folder = resolveUploadFolder(body.shelfName, session.hubDomain);
 
     const signature = signCloudinaryParams(
       {

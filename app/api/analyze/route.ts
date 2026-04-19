@@ -1,3 +1,5 @@
+import { requireAdminHubSession } from "@/lib/auth/request";
+
 type AnalyzeProvider = "openai" | "gemini";
 
 type AnalyzeRequestBody = {
@@ -240,6 +242,11 @@ async function analyzeWithOpenAi(input: {
 
 export async function POST(request: Request) {
   try {
+    const sessionResult = await requireAdminHubSession(request);
+    if (!sessionResult.ok) {
+      return sessionResult.response;
+    }
+
     const body = (await request.json()) as AnalyzeRequestBody;
 
     const imageBase64 = body.imageBase64?.trim();

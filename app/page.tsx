@@ -33,6 +33,12 @@ export default function Home() {
           </p>
           <div className="mt-4 flex flex-wrap gap-2">
             <Link
+              href="/login"
+              className="rounded-md bg-emerald-700 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-600"
+            >
+              Login
+            </Link>
+            <Link
               href="/student/inventory"
               className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-700"
             >

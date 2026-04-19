@@ -1,4 +1,6 @@
 import { executeDataConnect } from "@/lib/dataconnect";
+import { extractHubDomainMarker, isHubVisibleToDomain } from "@/lib/auth/hub-domain";
+import { requireAdminHubSession } from "@/lib/auth/request";
 
 type CheckoutItemInput = {
   name?: string;
@@ -27,6 +29,7 @@ type InventoryItemRecord = {
   quantity: number;
   category: string | null;
   size: string | null;
+  shelfLocationDescription: string | null;
 };
 
 type PreparedCheckoutItem = NormalizedCheckoutItem & {
@@ -79,6 +82,9 @@ query CheckoutInventory {
     quantity
     category
     size
+    shelf {
+      locationDescription
+    }
   }
 }
 `.trim();
@@ -505,11 +511,26 @@ function normalizeInventoryRow(value: unknown): InventoryItemRecord | null {
     quantity,
     category: readText(row.category),
     size: readText(row.size),
+    shelfLocationDescription:
+      row.shelf && typeof row.shelf === "object"
+        ? readText((row.shelf as Record<string, unknown>).locationDescription)
+        : null,
   };
+}
+
+function isInventoryRowVisibleToHub(row: InventoryItemRecord, hubDomain: string) {
+  const markerDomain = extractHubDomainMarker(row.shelfLocationDescription);
+  return isHubVisibleToDomain(markerDomain, hubDomain);
 }
 
 export async function POST(request: Request) {
   try {
+    const sessionResult = await requireAdminHubSession(request);
+    if (!sessionResult.ok) {
+      return sessionResult.response;
+    }
+
+    const session = sessionResult.session;
     const body = (await request.json()) as CheckoutBody;
     const incomingItems = Array.isArray(body.items) ? body.items : [];
 
@@ -536,7 +557,8 @@ export async function POST(request: Request) {
     const { data } = await executeDataConnect(listQuery);
     const inventoryRows = extractInventoryRows(data)
       .map(normalizeInventoryRow)
-      .filter((row): row is InventoryItemRecord => row !== null);
+      .filter((row): row is InventoryItemRecord => row !== null)
+      .filter((row) => isInventoryRowVisibleToHub(row, session.hubDomain));
 
     if (!inventoryRows.length) {
       return Response.json(
