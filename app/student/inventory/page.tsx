@@ -478,7 +478,6 @@ export default function StudentInventoryPage() {
       return haystack.includes(normalizedSearch);
     });
   }, [items, searchTerm, selectedShelfId, selectedCategory]);
-  }, [items, searchTerm]);
 
   const inventorySummary = useMemo(() => {
     const totalUnits = filteredItems.reduce((sum, item) => sum + item.quantity, 0);
