@@ -38,6 +38,13 @@
 
 body {
   background: var(--fp-page-bg);
+  background-attachment: fixed;
   color: var(--fp-text-primary);
   font-family: var(--font-geist-sans), sans-serif;
+  min-height: 100vh;
+}
+
+.hero-link:hover {
+  filter: brightness(1.18);
+  transform: scale(1.02);
 }

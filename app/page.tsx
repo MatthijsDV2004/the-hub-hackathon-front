@@ -24,7 +24,7 @@ const navLinkStyle = {
   textDecoration: "none",
   background: "var(--fp-surface-soft)",
   boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.06)",
-  transition: "border-color 0.15s, filter 0.15s",
+  transition: "filter 0.15s, transform 0.15s",
 } as React.CSSProperties;
 
 export default async function Home() {
@@ -52,7 +52,7 @@ export default async function Home() {
         }}
       >
         {/* Hero */}
-        <HexPanel contentStyle={{ padding: "36px 32px" }}>
+        <HexPanel cut={20} contentStyle={{ padding: "36px 32px" }}>
           <p
             style={{
               fontSize: 12,
@@ -76,7 +76,7 @@ export default async function Home() {
             }}
           >
             Open{" "}
-            <span style={{ color: "var(--fp-button-accent)" }}>Shelf</span>
+            <span style={{ color: "var(--fp-button-accent)" }}>Shelves</span>
           </h1>
           {!isLoggedIn ? (
             <>
@@ -95,6 +95,7 @@ export default async function Home() {
               <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
                 <Link
                   href="/login"
+                  className="hero-link"
                   style={{
                     ...navLinkStyle,
                     background: "var(--fp-success)",
@@ -106,6 +107,7 @@ export default async function Home() {
                 </Link>
                 <Link
                   href="/student/inventory"
+                  className="hero-link"
                   style={{
                     ...navLinkStyle,
                     background: "var(--fp-button-primary)",
@@ -115,7 +117,7 @@ export default async function Home() {
                 >
                   Student Inventory
                 </Link>
-                <Link href="/inventory" style={navLinkStyle}>
+                <Link href="/inventory" className="hero-link" style={navLinkStyle}>
                   Admin Upload
                 </Link>
               </div>
@@ -135,6 +137,8 @@ export default async function Home() {
             <HexPanel
               key={link.href}
               fill="var(--fp-surface-secondary)"
+              cut={14}
+              className="cursor-pointer transition-all duration-150 hover:brightness-125 hover:scale-[1.02]"
               contentStyle={{ padding: "16px 18px" }}
             >
               <Link
@@ -158,6 +162,7 @@ export default async function Home() {
         {/* What this solves */}
         <HexPanel
           fill="var(--fp-surface-accent)"
+          cut={14}
           contentStyle={{ padding: "20px 24px" }}
         >
           <p

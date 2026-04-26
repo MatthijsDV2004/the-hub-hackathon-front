@@ -67,14 +67,22 @@ async function readInventoryPayload(response: Response): Promise<{
   }
 }
 
+type EditingCell = {
+  itemId: string;
+  field: "quantity" | "updatedAt";
+  value: string;
+};
+
 export default function AdminStockPage() {
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedShelfId, setSelectedShelfId] = useState("all");
+  const [editingCell, setEditingCell] = useState<EditingCell | null>(null);
 
   const loadInventory = useCallback(async () => {
     setIsLoading(true);
@@ -303,6 +311,78 @@ export default function AdminStockPage() {
     [isDeleting, items, loadInventory]
   );
 
+  const startEdit = useCallback((item: InventoryItem, field: "quantity" | "updatedAt") => {
+    if (field === "quantity") {
+      setEditingCell({ itemId: item.id, field, value: String(item.quantity) });
+    } else {
+      const iso = item.updatedAt ? new Date(item.updatedAt).toISOString().slice(0, 16) : new Date().toISOString().slice(0, 16);
+      setEditingCell({ itemId: item.id, field, value: iso });
+    }
+    setError("");
+    setStatus("");
+  }, []);
+
+  const saveEdit = useCallback(async () => {
+    if (!editingCell || isSaving) return;
+    const { itemId, field, value } = editingCell;
+
+    setIsSaving(true);
+    setError("");
+    setStatus("");
+
+    try {
+      const body: Record<string, unknown> = { itemId };
+      if (field === "quantity") {
+        const q = Number(value);
+        if (!Number.isFinite(q) || q < 0) {
+          setError("Quantity must be a non-negative number.");
+          setIsSaving(false);
+          return;
+        }
+        body.quantity = Math.floor(q);
+      } else {
+        if (!value) {
+          setError("Please enter a valid date and time.");
+          setIsSaving(false);
+          return;
+        }
+        body.updatedAt = new Date(value).toISOString();
+      }
+
+      const response = await fetch("/api/dataconnect/inventory-items", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+      const json = (await response.json()) as { error?: string; quantity?: number; updatedAt?: string };
+
+      if (!response.ok) {
+        throw new Error(json.error || "Failed to update item.");
+      }
+
+      setItems((prev) =>
+        prev.map((item) => {
+          if (item.id !== itemId) return item;
+          return {
+            ...item,
+            quantity: json.quantity ?? item.quantity,
+            updatedAt: json.updatedAt ?? item.updatedAt,
+          };
+        })
+      );
+
+      setEditingCell(null);
+      setStatus(`Updated ${field === "quantity" ? "quantity" : "timestamp"} successfully.`);
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Failed to save changes.");
+    } finally {
+      setIsSaving(false);
+    }
+  }, [editingCell, isSaving]);
+
+  const cancelEdit = useCallback(() => setEditingCell(null), []);
+
   const navLink = { padding: "8px 14px", borderRadius: 10, border: "1px solid var(--fp-panel-border)", color: "var(--fp-text-secondary)", fontSize: 13, fontWeight: 600, textDecoration: "none", background: "var(--fp-input-bg)" } as React.CSSProperties;
 
   return (
@@ -461,8 +541,57 @@ export default function AdminStockPage() {
                       <td className="px-3 py-2">{item.brand}</td>
                       <td className="px-3 py-2 text-slate-100">{item.name}</td>
                       <td className="px-3 py-2">{item.category || "other"}</td>
-                      <td className="px-3 py-2">{item.quantity}</td>
-                      <td className="px-3 py-2 text-slate-300">{formatTimestamp(item.updatedAt)}</td>
+                      <td className="px-3 py-2">
+                        {editingCell?.itemId === item.id && editingCell.field === "quantity" ? (
+                          <div className="flex items-center gap-1">
+                            <input
+                              type="number"
+                              min={0}
+                              value={editingCell.value}
+                              onChange={(e) => setEditingCell((c) => c ? { ...c, value: e.target.value } : null)}
+                              onKeyDown={(e) => { if (e.key === "Enter") void saveEdit(); if (e.key === "Escape") cancelEdit(); }}
+                              className="w-20 rounded border border-emerald-300/50 bg-slate-800 px-1.5 py-0.5 text-sm text-white outline-none"
+                              autoFocus
+                            />
+                            <button type="button" onClick={() => void saveEdit()} disabled={isSaving} className="rounded bg-emerald-600/80 px-1.5 py-0.5 text-xs text-white hover:bg-emerald-500 disabled:opacity-50">✓</button>
+                            <button type="button" onClick={cancelEdit} className="rounded bg-slate-700 px-1.5 py-0.5 text-xs text-slate-300 hover:bg-slate-600">✕</button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => startEdit(item, "quantity")}
+                            className="rounded px-1 text-left hover:bg-emerald-900/40 hover:text-emerald-200"
+                            title="Click to edit quantity"
+                          >
+                            {item.quantity}
+                          </button>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-slate-300">
+                        {editingCell?.itemId === item.id && editingCell.field === "updatedAt" ? (
+                          <div className="flex items-center gap-1">
+                            <input
+                              type="datetime-local"
+                              value={editingCell.value}
+                              onChange={(e) => setEditingCell((c) => c ? { ...c, value: e.target.value } : null)}
+                              onKeyDown={(e) => { if (e.key === "Enter") void saveEdit(); if (e.key === "Escape") cancelEdit(); }}
+                              className="rounded border border-emerald-300/50 bg-slate-800 px-1.5 py-0.5 text-xs text-white outline-none"
+                              autoFocus
+                            />
+                            <button type="button" onClick={() => void saveEdit()} disabled={isSaving} className="rounded bg-emerald-600/80 px-1.5 py-0.5 text-xs text-white hover:bg-emerald-500 disabled:opacity-50">✓</button>
+                            <button type="button" onClick={cancelEdit} className="rounded bg-slate-700 px-1.5 py-0.5 text-xs text-slate-300 hover:bg-slate-600">✕</button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => startEdit(item, "updatedAt")}
+                            className="rounded px-1 text-left hover:bg-emerald-900/40 hover:text-emerald-200"
+                            title="Click to edit timestamp"
+                          >
+                            {formatTimestamp(item.updatedAt)}
+                          </button>
+                        )}
+                      </td>
                       <td className="px-3 py-2">
                         <button
                           type="button"

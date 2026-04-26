@@ -248,8 +248,26 @@ mutation DeleteInventoryItem($id: UUID) {
 }
 `.trim();
 
+const DEFAULT_UPDATE_MUTATION = `
+mutation UpdateInventoryItem(
+  $id: UUID
+  $quantity: Int
+  $updatedAt: Timestamp
+) {
+  inventoryItem_update(
+    id: $id
+    data: {
+      quantity: $quantity
+      updatedAt: $updatedAt
+    }
+  )
+}
+`.trim();
+
 const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// Firebase Data Connect returns UUIDs as 32 hex chars with no hyphens
+const COMPACT_UUID_PATTERN = /^[0-9a-f]{32}$/i;
 
 const LOCATION_MARKER_PREFIX = "[[LOC]]";
 const SHELF_TAG_MARKER_PREFIX = "[[SHELF_TAG]]";
@@ -268,7 +286,10 @@ function normalizeUuid(value: string | null | undefined) {
   if (!trimmed) {
     return null;
   }
-  return UUID_PATTERN.test(trimmed) ? trimmed : null;
+  if (UUID_PATTERN.test(trimmed) || COMPACT_UUID_PATTERN.test(trimmed)) {
+    return trimmed;
+  }
+  return null;
 }
 
 function normalizeText(value: string | null | undefined) {
@@ -1108,6 +1129,67 @@ export async function POST(request: Request) {
       error instanceof Error
         ? error.message
         : "Failed to save inventory items through Data Connect.";
+
+    return Response.json({ error: message }, { status: 500 });
+  }
+}
+
+export async function PATCH(request: Request) {
+  try {
+    const sessionResult = await requireAdminHubSession(request);
+    if (!sessionResult.ok) {
+      return sessionResult.response;
+    }
+
+    const session = sessionResult.session;
+    const body = (await request.json()) as {
+      itemId?: string;
+      quantity?: number;
+      updatedAt?: string;
+    };
+
+    const itemId = normalizeUuid(body.itemId);
+    if (!itemId) {
+      return Response.json({ error: "Missing or invalid itemId." }, { status: 400 });
+    }
+
+    const allItems = await listAllInventoryItems();
+    const target = allItems.find((row) => row.id === itemId) || null;
+
+    if (!target) {
+      return Response.json({ error: "Item not found." }, { status: 404 });
+    }
+
+    if (!isItemVisibleToHub(target, session.hubDomain)) {
+      return Response.json(
+        { error: "You cannot edit items from a different hub." },
+        { status: 403 }
+      );
+    }
+
+    const quantityRaw = body.quantity != null ? Number(body.quantity) : null;
+    const quantity =
+      quantityRaw != null && Number.isFinite(quantityRaw) && quantityRaw >= 0
+        ? Math.floor(quantityRaw)
+        : target.quantity;
+
+    const updatedAtRaw = body.updatedAt?.trim() || null;
+    const updatedAt = updatedAtRaw && Number.isFinite(Date.parse(updatedAtRaw))
+      ? new Date(updatedAtRaw).toISOString()
+      : new Date().toISOString();
+
+    await executeDataConnect(DEFAULT_UPDATE_MUTATION, {
+      id: itemId,
+      quantity,
+      updatedAt,
+    });
+
+    return Response.json({ itemId, quantity, updatedAt });
+  } catch (error) {
+    const message =
+      error instanceof Error
+        ? error.message
+        : "Failed to update inventory item through Data Connect.";
 
     return Response.json({ error: message }, { status: 500 });
   }

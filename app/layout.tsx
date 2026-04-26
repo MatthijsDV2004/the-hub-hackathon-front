@@ -18,7 +18,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Open Shelf",
+  title: "Open Shelves",
   description:
     "See what's available at The Hub before you arrive. Students browse inventory, admins manage stock.",
 };

@@ -52,6 +52,10 @@ function resetSessionCache() {
   sessionPromise = null;
 }
 
+function cutCorners(px: number) {
+  return `polygon(${px}px 0,calc(100% - ${px}px) 0,100% ${px}px,100% calc(100% - ${px}px),calc(100% - ${px}px) 100%,${px}px 100%,0 calc(100% - ${px}px),0 ${px}px)`
+}
+
 export default function NavBar() {
   const pathname = usePathname();
   const router = useRouter();
@@ -109,7 +113,7 @@ export default function NavBar() {
     <>
       <style>{`
         .nav-link-active { color: var(--fp-button-accent) !important; }
-        .nav-link:hover { color: var(--fp-text-primary) !important; }
+        .nav-link:hover { color: var(--fp-text-primary) !important; filter: brightness(1.15); }
         .hamburger-line { display: block; width: 22px; height: 2px; background: var(--fp-text-secondary); margin: 4px 0; transition: all 0.2s; }
         .profile-avatar { width: 34px; height: 34px; border-radius: 50%; object-fit: cover; border: 2px solid var(--fp-panel-border); cursor: pointer; }
         .avatar-initials { width: 34px; height: 34px; border-radius: 50%; background: var(--fp-button-accent); color: #fff; font-size: 13px; font-weight: 800; display: flex; align-items: center; justify-content: center; cursor: pointer; border: 2px solid var(--fp-panel-border); }
@@ -160,7 +164,7 @@ export default function NavBar() {
           >
             <Image
               src="/logo.png"
-              alt="Open Shelf"
+              alt="Open Shelves"
               width={38}
               height={38}
               priority
@@ -175,7 +179,7 @@ export default function NavBar() {
               }}
             >
               Open{" "}
-              <span style={{ color: "var(--fp-button-accent)" }}>Shelf</span>
+              <span style={{ color: "var(--fp-button-accent)" }}>Shelves</span>
             </span>
           </Link>
 
@@ -276,37 +280,61 @@ export default function NavBar() {
               </div>
             ) : (
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                {/* Ghost Log in button */}
                 <Link
                   href="/login"
                   style={{
-                    padding: "8px 14px",
-                    borderRadius: 8,
-                    border: "1px solid var(--fp-panel-border)",
+                    padding: "7px 14px",
+                    clipPath: cutCorners(6),
                     background: "transparent",
-                    color: "var(--fp-text-secondary)",
+                    border: "none",
+                    color: "var(--fp-text-muted)",
                     fontSize: 13,
                     fontWeight: 600,
                     textDecoration: "none",
                     whiteSpace: "nowrap",
+                    transition: "filter 0.15s",
                   }}
+                  onMouseEnter={(e) => (e.currentTarget.style.filter = "brightness(1.2)")}
+                  onMouseLeave={(e) => (e.currentTarget.style.filter = "")}
                 >
                   Log in
                 </Link>
-                <Link
-                  href="/login"
-                  style={{
-                    padding: "8px 16px",
-                    borderRadius: 8,
-                    background: "var(--fp-button-accent)",
-                    color: "#fff",
-                    fontSize: 13,
-                    fontWeight: 700,
-                    textDecoration: "none",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  Get Started
-                </Link>
+                {/* Accent Get Started button with cut-corner border glow */}
+                <div style={{ position: "relative" }}>
+                  <div
+                    aria-hidden
+                    style={{
+                      position: "absolute",
+                      inset: 0,
+                      clipPath: cutCorners(8),
+                      background: "var(--fp-panel-border)",
+                      boxShadow: "0 0 12px var(--fp-panel-glow-1)",
+                      pointerEvents: "none",
+                    }}
+                  />
+                  <Link
+                    href="/login"
+                    style={{
+                      position: "relative",
+                      display: "inline-block",
+                      margin: 2,
+                      padding: "6px 14px",
+                      clipPath: cutCorners(6),
+                      background: "var(--fp-surface-accent)",
+                      color: "var(--fp-button-accent)",
+                      fontSize: 13,
+                      fontWeight: 700,
+                      textDecoration: "none",
+                      whiteSpace: "nowrap",
+                      transition: "filter 0.15s",
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.filter = "brightness(1.15)")}
+                    onMouseLeave={(e) => (e.currentTarget.style.filter = "")}
+                  >
+                    Get Started
+                  </Link>
+                </div>
               </div>
             )}
 
